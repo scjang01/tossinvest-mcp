@@ -1,0 +1,28 @@
+{
+  "serverInfo": {
+    "name": "tossinvest-mcp",
+    "version": "0.1.0"
+  },
+  "tools": [
+    { "name": "toss_get_prices" },
+    { "name": "toss_get_orderbook" },
+    { "name": "toss_get_trades" },
+    { "name": "toss_get_candles" },
+    { "name": "toss_get_price_limits" },
+    { "name": "toss_get_stocks" },
+    { "name": "toss_get_stock_warnings" },
+    { "name": "toss_get_exchange_rate" },
+    { "name": "toss_get_kr_market_calendar" },
+    { "name": "toss_get_us_market_calendar" },
+    { "name": "toss_get_accounts" },
+    { "name": "toss_get_holdings" },
+    { "name": "toss_get_buying_power" },
+    { "name": "toss_get_sellable_quantity" },
+    { "name": "toss_get_commissions" },
+    { "name": "toss_get_orders" },
+    { "name": "toss_get_order" },
+    { "name": "toss_create_order" },
+    { "name": "toss_modify_order" },
+    { "name": "toss_cancel_order" }
+  ]
+}
