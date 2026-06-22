@@ -1,10 +1,24 @@
 {
   "name": "tossinvest-mcp",
-  "version": "0.0.1",
-  "description": "Model Context Protocol (MCP) server for Toss Securities Open API (Under Development)",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Model Context Protocol (MCP) server for Toss Securities Open API",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "tossinvest-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
+    "smoke:readonly": "npm run build && node scripts/smoke-readonly.mjs",
+    "smoke:trading:mock": "npm run build && node scripts/smoke-trading-mock.mjs"
   },
   "keywords": [
     "mcp",
@@ -15,7 +29,7 @@
     "trading",
     "finance"
   ],
-  "author": "",
+  "author": "scjang01",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -24,5 +38,16 @@
   "bugs": {
     "url": "https://github.com/scjang01/tossinvest-mcp/issues"
   },
-  "homepage": "https://github.com/scjang01/tossinvest-mcp#readme"
+  "homepage": "https://github.com/scjang01/tossinvest-mcp#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
 }
