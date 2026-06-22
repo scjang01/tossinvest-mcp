@@ -1,0 +1,33 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      apiKey:
+        type: string
+        description: "Toss Securities Open API Key (TOSSINVEST_API_KEY)"
+      secretKey:
+        type: string
+        description: "Toss Securities Open API Secret Key (TOSSINVEST_SECRET_KEY)"
+      account:
+        type: string
+        description: "Default account sequence number (TOSSINVEST_ACCOUNT). Defaults to 1."
+        default: "1"
+      enableTrading:
+        type: boolean
+        description: "Enable order creation, modification, and cancellation tools (TOSSINVEST_ENABLE_TRADING). Disabled by default."
+        default: false
+    required:
+      - apiKey
+      - secretKey
+  commandFunction: |-
+    (config) => ({
+      command: "npx",
+      args: ["-y", "tossinvest-mcp"],
+      env: {
+        TOSSINVEST_API_KEY: config.apiKey,
+        TOSSINVEST_SECRET_KEY: config.secretKey,
+        TOSSINVEST_ACCOUNT: config.account ?? "1",
+        TOSSINVEST_ENABLE_TRADING: config.enableTrading ? "true" : "false"
+      }
+    })
