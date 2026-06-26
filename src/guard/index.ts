@@ -3,7 +3,7 @@ import type { TossClient } from "../toss/client.js";
 import { type Currency } from "./currency.js";
 import { estimateOrderAmount, fetchSymbolCurrency } from "./estimate.js";
 import { reconcileTodayRecords } from "./reconcile.js";
-import { contributionOf, kstDate, recordOrder, resolveStatePath, type OrderRecord } from "./state.js";
+import { contributionOf, kstDate, readTodayRecords, recordOrder, resolveStatePath, type OrderRecord } from "./state.js";
 
 export { resolveStatePath, recordOrder } from "./state.js";
 export type { OrderRecord } from "./state.js";
@@ -256,23 +256,29 @@ async function assertDailyLimits(
   addedAmount: number,
   options: { replaceOrderId?: string } = {}
 ): Promise<void> {
-  if (
-    config.dailyMaxOrderCount === undefined &&
-    config.dailyMaxOrderAmountKrw === undefined &&
-    config.dailyMaxOrderAmountUsd === undefined
-  ) {
+  const countLimit = config.dailyMaxOrderCount;
+  const dailyAmountLimit = currency === "KRW" ? config.dailyMaxOrderAmountKrw : config.dailyMaxOrderAmountUsd;
+
+  // No limit applies to this order's currency: nothing to check.
+  if (countLimit === undefined && dailyAmountLimit === undefined) {
     return;
   }
 
-  const todays = await reconcileTodayRecords(client, config);
+  // The amount check needs each open order's live contribution; the count check
+  // only needs today's record tally. Reconcile (a GET per open order, and the
+  // fail-safe block if one fails) only when an amount limit for THIS currency is
+  // active — a count-only order is tallied straight from the ledger.
+  const todays =
+    dailyAmountLimit !== undefined
+      ? await reconcileTodayRecords(client, config)
+      : readTodayRecords(resolveStatePath(config));
 
-  if (config.dailyMaxOrderCount !== undefined && todays.length + 1 > config.dailyMaxOrderCount) {
+  if (countLimit !== undefined && todays.length + 1 > countLimit) {
     throw new Error(
-      `Order blocked: daily order count limit reached (${todays.length}/${config.dailyMaxOrderCount} orders today via this MCP).`
+      `Order blocked: daily order count limit reached (${todays.length}/${countLimit} orders today via this MCP).`
     );
   }
 
-  const dailyAmountLimit = currency === "KRW" ? config.dailyMaxOrderAmountKrw : config.dailyMaxOrderAmountUsd;
   if (dailyAmountLimit === undefined) {
     return;
   }

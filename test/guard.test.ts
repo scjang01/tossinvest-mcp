@@ -15,7 +15,7 @@ import {
   withOrderLock
 } from "../src/guard/index.js";
 import { reconcileTodayRecords } from "../src/guard/reconcile.js";
-import { contributionFromDetail, dailyTotals, kstDate, readState, recordOrder, writeState } from "../src/guard/state.js";
+import { contributionFromDetail, kstDate, readState, recordOrder, writeState } from "../src/guard/state.js";
 import type { TossClient } from "../src/toss/client.js";
 
 const tempDir = mkdtempSync(join(tmpdir(), "tossinvest-guard-"));
@@ -218,6 +218,26 @@ describe("guardCreateOrder", () => {
     recordOrder(
       config.guardStatePath!,
       buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1 })
+    );
+    await assert.rejects(() => guardCreateOrder(pricesClient("KRW"), config, { ...BASE_BUY }), /daily order count limit/);
+  });
+
+  it("counts a count-only daily limit from the ledger without reconciling open orders", async () => {
+    // Count-only: an open order with an orderId must NOT be re-fetched (pricesClient
+    // throws on any non-/prices call). The block must come from the count tally,
+    // proving no reconciliation GET — and thus no fail-safe block — happened.
+    const config = makeConfig({ TOSSINVEST_DAILY_MAX_ORDER_COUNT: "1" });
+    recordOrder(
+      config.guardStatePath!,
+      buildOrderRecord({
+        account: 1,
+        symbol: "005930",
+        side: "BUY",
+        orderType: "LIMIT",
+        currency: "KRW",
+        estimatedAmount: 1,
+        orderId: "open-order-1"
+      })
     );
     await assert.rejects(() => guardCreateOrder(pricesClient("KRW"), config, { ...BASE_BUY }), /daily order count limit/);
   });
@@ -613,16 +633,15 @@ describe("state helpers", () => {
     assert.deepEqual(readState(nextStatePath()), []);
   });
 
-  it("round-trips records and aggregates daily totals", () => {
+  it("round-trips appended records", () => {
     const path = nextStatePath();
-    const today = kstDate();
     recordOrder(path, buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 100 }));
     recordOrder(path, buildOrderRecord({ account: 1, symbol: "AAPL", side: "BUY", orderType: "MARKET", currency: "USD", estimatedAmount: 5 }));
 
-    const totals = dailyTotals(readState(path), today);
-    assert.equal(totals.count, 2);
-    assert.equal(totals.amountByCurrency.KRW, 100);
-    assert.equal(totals.amountByCurrency.USD, 5);
+    const records = readState(path);
+    assert.equal(records.length, 2);
+    assert.equal(records[0].symbol, "005930");
+    assert.equal(records[1].symbol, "AAPL");
   });
 
   it("prunes past-day records when appending a new one", () => {
@@ -636,13 +655,6 @@ describe("state helpers", () => {
     const records = readState(path);
     assert.equal(records.length, 1);
     assert.equal(records[0].symbol, "AAPL");
-  });
-
-  it("ignores records from other dates", () => {
-    const records = [
-      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 100 })
-    ];
-    assert.equal(dailyTotals(records, "1999-01-01").count, 0);
   });
 
   it("formats KST date as YYYY-MM-DD", () => {

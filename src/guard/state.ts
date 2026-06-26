@@ -24,11 +24,6 @@ export type OrderRecord = {
   terminal?: boolean; // true once the order reached a terminal status (freeze, stop polling)
 };
 
-export type DailyTotals = {
-  count: number;
-  amountByCurrency: Record<Currency, number>;
-};
-
 const STATE_DIR_NAME = "tossinvest-mcp";
 const STATE_FILE_NAME = "guard-state.json";
 
@@ -104,6 +99,17 @@ export function recordOrder(path: string, record: OrderRecord): void {
   writeState(path, existing);
 }
 
+/**
+ * Today's (KST) records without any live reconciliation. The daily count limit
+ * depends only on how many orders were placed today, which reconciliation never
+ * changes, so a count-only check reads the ledger directly and avoids both the
+ * per-order GETs and the fail-safe block a failed fetch would otherwise cause.
+ */
+export function readTodayRecords(path: string): OrderRecord[] {
+  const today = kstDate();
+  return readState(path).filter((record) => record.date === today);
+}
+
 let tmpCounter = 0;
 
 /**
@@ -116,27 +122,6 @@ export function writeState(path: string, records: OrderRecord[]): void {
   const tmp = `${path}.${process.pid}.${tmpCounter}.tmp`;
   writeFileSync(tmp, JSON.stringify(records, null, 2), "utf8");
   renameSync(tmp, path);
-}
-
-/**
- * Aggregate today's (KST) records into count and per-currency amount totals,
- * using each record's last-known contribution (committedAmount) and falling back
- * to its placement estimate when it has never been reconciled.
- */
-export function dailyTotals(records: OrderRecord[], today: string): DailyTotals {
-  const totals: DailyTotals = { count: 0, amountByCurrency: { KRW: 0, USD: 0 } };
-
-  for (const record of records) {
-    if (record.date !== today) {
-      continue;
-    }
-    totals.count += 1;
-    if (record.currency === "KRW" || record.currency === "USD") {
-      totals.amountByCurrency[record.currency] += contributionOf(record);
-    }
-  }
-
-  return totals;
 }
 
 /** A record's current contribution: its reconciled amount, or the placement estimate. */
