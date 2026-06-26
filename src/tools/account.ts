@@ -44,7 +44,7 @@ export function registerAccountTools(server: McpServer, client: TossClient, conf
       description: "Get available buying power for an account. currency is required: KRW for Korean stocks, USD for US stocks.",
       inputSchema: {
         ...accountInputSchema,
-        currency: currencySchema
+        currency: currencySchema.describe("Currency code: KRW (Korean stocks) or USD (US stocks)")
       }
     },
     ({ accountSeq, currency }) =>

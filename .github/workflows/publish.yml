@@ -21,4 +21,8 @@ jobs:
 
       - run: npm ci
 
+      - run: npm test
+
+      - run: npm run smoke:trading:mock
+
       - run: npm publish --provenance --access public

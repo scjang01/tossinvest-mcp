@@ -1,8 +1,14 @@
 import type { Config } from "../config.js";
 import { MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_TOTAL_WAIT_MS, parseRetryAfterMs, sleep } from "../utils/retry.js";
-import { normalizeTossError, TossApiError, TossNetworkError } from "./errors.js";
+import { normalizeOAuthTokenError, normalizeTossError, TossApiError, TossNetworkError } from "./errors.js";
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
+
+// Per-request wall-clock timeout. Without it a hung connection or a stalled
+// response would block the MCP tool (and, on the order path, the pre-order
+// reconciliation) indefinitely. Applied fresh on every attempt so rate-limit
+// retries each get a full budget.
+const REQUEST_TIMEOUT_MS = 20_000;
 
 type TokenState = {
   accessToken: string;
@@ -75,11 +81,10 @@ export class TossClient {
     const payload = await readJson(response);
 
     if (!response.ok) {
-      throw normalizeTossError(response.status, payload, response.headers.get("X-Request-Id"));
+      throw normalizeOAuthTokenError(response.status, payload, response.headers.get("X-Request-Id"));
     }
 
-    const token = payload as TokenResponse;
-    if (!isTokenResponse(token)) {
+    if (!isTokenResponse(payload)) {
       throw new TossApiError("Invalid OAuth token response from Toss API.", {
         status: response.status,
         code: "invalid-token-response",
@@ -89,6 +94,7 @@ export class TossClient {
       });
     }
 
+    const token = payload;
     const expiresInMs = (token.expires_in ?? 3600) * 1000;
 
     this.tokenState = {
@@ -141,14 +147,26 @@ export class TossClient {
 
 async function safeFetch(input: URL | string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    // Fresh timeout signal per call so retries are not aborted by an earlier one.
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new TossNetworkError(`Toss Open API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`, {
+        cause: error,
+        hint: "토스증권 Open API 응답이 지연되었습니다. 네트워크 상태를 확인하고 잠시 후 다시 시도하세요."
+      });
+    }
     throw new TossNetworkError("Failed to connect to Toss Open API.", { cause: error });
   }
 }
 
-function isTokenResponse(value: TokenResponse): value is TokenResponse & { access_token: string } {
-  return typeof value.access_token === "string" && value.access_token.length > 0;
+function isTokenResponse(value: unknown): value is TokenResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { access_token?: unknown }).access_token === "string" &&
+    (value as { access_token: string }).access_token.length > 0
+  );
 }
 
 async function readJson(response: Response): Promise<unknown> {

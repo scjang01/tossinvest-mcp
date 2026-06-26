@@ -13,7 +13,11 @@ const config: Config = {
   defaultAccountSeq: 1,
   baseUrl: "https://mock-toss.example",
   tradingEnabled: false,
-  yoloTrading: false
+  requireOrderConfirmation: true,
+  allowSellOrders: false,
+  allowMarketOrders: false,
+  marketOrderBufferPct: 5,
+  lockAccount: true
 };
 
 afterEach(() => {

@@ -71,6 +71,33 @@ export function normalizeTossError(status: number, body: unknown, requestIdHeade
   });
 }
 
+/**
+ * Normalize an error from the OAuth2 token endpoint. Per the spec, token
+ * failures use the OAuth2 shape `{ error, error_description }` where `error` is
+ * a STRING code (e.g. "invalid_client") — not the common `{ error: { code,
+ * message } }` envelope. Falls back to the common normalizer otherwise so a
+ * non-standard body still surfaces useful detail.
+ */
+export function normalizeOAuthTokenError(status: number, body: unknown, requestIdHeader: string | null): TossApiError {
+  const payload = body as { error?: unknown; error_description?: unknown };
+
+  if (payload && typeof payload.error === "string") {
+    const code = payload.error;
+    const description = typeof payload.error_description === "string" ? payload.error_description : undefined;
+    const message = description ?? `OAuth token request failed (${code}).`;
+
+    return new TossApiError(message, {
+      status,
+      code,
+      requestId: requestIdHeader ?? undefined,
+      data: body,
+      hint: getErrorHint(status, code, message)
+    });
+  }
+
+  return normalizeTossError(status, body, requestIdHeader);
+}
+
 export function formatToolError(error: unknown): string {
   if (error instanceof TossApiError || error instanceof TossNetworkError) {
     return JSON.stringify(error.toJSON(), null, 2);
