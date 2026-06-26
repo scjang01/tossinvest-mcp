@@ -3,19 +3,25 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { Config } from "../config.js";
-import type { Currency } from "./currency.js";
+import { toFiniteNumber, type Currency } from "./currency.js";
 
 export type OrderRecord = {
-  date: string; // KST calendar date, YYYY-MM-DD
+  date: string; // KST calendar date the order was placed, YYYY-MM-DD (the daily bucket)
   account: number;
   symbol: string;
   side: "BUY" | "SELL";
   orderType: "LIMIT" | "MARKET";
   currency: Currency;
-  estimatedAmount: number;
+  estimatedAmount: number; // committed notional estimated at placement; used as a fallback
   orderId?: string;
   clientOrderId?: string;
   timestamp: string; // ISO 8601
+
+  // Reconciliation cache, refreshed by reconcileToday() from the live order.
+  status?: string; // last-seen OrderStatus
+  filledAmount?: number; // actual filled notional (native currency)
+  committedAmount?: number; // last-computed contribution = filled + open remaining
+  terminal?: boolean; // true once the order reached a terminal status (freeze, stop polling)
 };
 
 export type DailyTotals = {
@@ -25,6 +31,12 @@ export type DailyTotals = {
 
 const STATE_DIR_NAME = "tossinvest-mcp";
 const STATE_FILE_NAME = "guard-state.json";
+
+// Terminal order statuses: the order can no longer change, so its contribution
+// is frozen at the filled portion (any unfilled quantity is released). All other
+// statuses — including unknown ones the spec says to tolerate — are treated as
+// still open and re-polled. See OrderStatus in the Toss OpenAPI spec.
+const TERMINAL_STATUSES = new Set(["FILLED", "CANCELED", "REJECTED", "REPLACED"]);
 
 /** Resolve the guard state file path, honoring an explicit override or the OS data directory. */
 export function resolveStatePath(config: Config): string {
@@ -80,26 +92,37 @@ export function readState(path: string): OrderRecord[] {
   return parsed as OrderRecord[];
 }
 
-/** Append a record after a successful order. Creates the directory and file as needed. */
+/**
+ * Append a record after a successful order. Daily limits only ever consult
+ * today's (KST) records, so older records are dropped here to keep the ledger
+ * bounded — they carry no information any check uses.
+ */
 export function recordOrder(path: string, record: OrderRecord): void {
-  const existing = readState(path);
+  const today = kstDate();
+  const existing = readState(path).filter((existingRecord) => existingRecord.date === today);
   existing.push(record);
-  mkdirSync(dirname(path), { recursive: true });
-  // Write to a temp file then rename so a concurrent reader never sees a
-  // half-written file (rename is atomic on the same filesystem).
-  writeStateAtomic(path, existing);
+  writeState(path, existing);
 }
 
 let tmpCounter = 0;
 
-function writeStateAtomic(path: string, records: OrderRecord[]): void {
+/**
+ * Persist records atomically: write a temp file then rename, so a concurrent
+ * reader never sees a half-written file (rename is atomic on the same filesystem).
+ */
+export function writeState(path: string, records: OrderRecord[]): void {
+  mkdirSync(dirname(path), { recursive: true });
   tmpCounter += 1;
   const tmp = `${path}.${process.pid}.${tmpCounter}.tmp`;
   writeFileSync(tmp, JSON.stringify(records, null, 2), "utf8");
   renameSync(tmp, path);
 }
 
-/** Aggregate today's (KST) records into count and per-currency amount totals. */
+/**
+ * Aggregate today's (KST) records into count and per-currency amount totals,
+ * using each record's last-known contribution (committedAmount) and falling back
+ * to its placement estimate when it has never been reconciled.
+ */
 export function dailyTotals(records: OrderRecord[], today: string): DailyTotals {
   const totals: DailyTotals = { count: 0, amountByCurrency: { KRW: 0, USD: 0 } };
 
@@ -109,11 +132,69 @@ export function dailyTotals(records: OrderRecord[], today: string): DailyTotals 
     }
     totals.count += 1;
     if (record.currency === "KRW" || record.currency === "USD") {
-      totals.amountByCurrency[record.currency] += record.estimatedAmount;
+      totals.amountByCurrency[record.currency] += contributionOf(record);
     }
   }
 
   return totals;
+}
+
+/** A record's current contribution: its reconciled amount, or the placement estimate. */
+export function contributionOf(record: OrderRecord): number {
+  return record.committedAmount ?? record.estimatedAmount;
+}
+
+export function isTerminalStatus(status: unknown): boolean {
+  return typeof status === "string" && TERMINAL_STATUSES.has(status);
+}
+
+export type Contribution = {
+  status?: string;
+  currency?: Currency;
+  filled: number; // actual filled notional
+  committed: number; // filled + open remaining (filled only when terminal)
+  terminal: boolean;
+};
+
+/**
+ * Compute an order's contribution from its live detail (GET /orders/{id}).
+ *
+ * filled is the actual executed notional (execution.filledAmount, or
+ * averageFilledPrice * filledQuantity as a fallback). When terminal, the
+ * contribution is exactly the filled portion — unfilled quantity is released.
+ * When still open, the open remaining ((quantity - filled) * price) is added; if
+ * the remaining cannot be priced (e.g. an open MARKET order with no price), we
+ * fall back to the larger of the placement estimate and the filled amount so the
+ * limit is never under-counted.
+ */
+export function contributionFromDetail(detail: unknown, record: OrderRecord): Contribution {
+  const root = unwrap(detail);
+  const status = readString(root, "status");
+  const terminal = isTerminalStatus(status);
+  const currency = readCurrency(root);
+
+  const execution = unwrap(readKey(root, "execution"));
+  const filledQuantity = toFiniteNumber(readKey(execution, "filledQuantity")) ?? 0;
+  const filledAmountField = toFiniteNumber(readKey(execution, "filledAmount"));
+  const averageFilledPrice = toFiniteNumber(readKey(execution, "averageFilledPrice"));
+  const filled =
+    filledAmountField ?? (averageFilledPrice !== undefined ? averageFilledPrice * filledQuantity : 0);
+
+  if (terminal) {
+    return { status, currency, filled, committed: filled, terminal: true };
+  }
+
+  const quantity = toFiniteNumber(readKey(root, "quantity"));
+  const price = toFiniteNumber(readKey(root, "price"));
+  let committed: number;
+  if (quantity !== undefined && price !== undefined) {
+    const remaining = Math.max(0, quantity - filledQuantity) * price;
+    committed = filled + remaining;
+  } else {
+    committed = Math.max(record.estimatedAmount, filled);
+  }
+
+  return { status, currency, filled, committed, terminal: false };
 }
 
 /** Current calendar date in the Asia/Seoul timezone, formatted YYYY-MM-DD. */
@@ -124,6 +205,32 @@ export function kstDate(timestampMs: number = Date.now()): string {
     month: "2-digit",
     day: "2-digit"
   }).format(new Date(timestampMs));
+}
+
+function unwrap(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  const inner = obj.result;
+  if (inner !== null && typeof inner === "object" && !Array.isArray(inner)) {
+    return inner as Record<string, unknown>;
+  }
+  return obj;
+}
+
+function readKey(obj: Record<string, unknown> | undefined, key: string): unknown {
+  return obj === undefined ? undefined : obj[key];
+}
+
+function readString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = readKey(obj, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function readCurrency(obj: Record<string, unknown> | undefined): Currency | undefined {
+  const value = readKey(obj, "currency");
+  return value === "KRW" || value === "USD" ? value : undefined;
 }
 
 function asMessage(error: unknown): string {

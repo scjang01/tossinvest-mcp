@@ -19,7 +19,7 @@ export type AmountEstimate = {
 /**
  * Estimate the notional amount of an order before it reaches the Toss order API.
  *
- * Rules (see docs/trading-guardrails-plan.md):
+ * Rules:
  *  - LIMIT:                 quantity * price
  *  - amount-based MARKET:   orderAmount
  *  - quantity MARKET buy:   quantity * bestAsk * (1 + bufferPct/100)
@@ -94,8 +94,7 @@ export async function estimateOrderAmount(
 export async function fetchSymbolCurrency(client: TossClient, symbol: string): Promise<Currency> {
   const response = await client.request({ path: "/api/v1/prices", query: { symbols: symbol } });
   const root = unwrap(response);
-  const list = Array.isArray(root) ? root : Array.isArray(root?.result) ? root.result : undefined;
-  const entry = Array.isArray(list) ? list[0] : undefined;
+  const entry = Array.isArray(root) ? root[0] : undefined;
   const currency = getKey(entry, "currency");
   if (currency !== "KRW" && currency !== "USD") {
     throw new Error(`Order blocked: could not read a recognized currency for ${symbol} from the prices API.`);
@@ -144,7 +143,7 @@ export function orderbookCurrency(response: unknown): Currency | undefined {
   return currency === "KRW" || currency === "USD" ? currency : undefined;
 }
 
-function unwrap(response: unknown): any {
+function unwrap(response: unknown): Record<string, unknown> | unknown[] | undefined {
   if (response === null || typeof response !== "object") {
     return undefined;
   }
@@ -153,8 +152,11 @@ function unwrap(response: unknown): any {
   }
   const obj = response as Record<string, unknown>;
   const inner = obj.result;
-  if (inner !== undefined && inner !== null && typeof inner === "object") {
+  if (Array.isArray(inner)) {
     return inner;
+  }
+  if (inner !== null && typeof inner === "object") {
+    return inner as Record<string, unknown>;
   }
   return obj;
 }

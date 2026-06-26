@@ -14,7 +14,8 @@ import {
   guardModifyOrder,
   withOrderLock
 } from "../src/guard/index.js";
-import { dailyTotals, kstDate, readState, recordOrder } from "../src/guard/state.js";
+import { reconcileTodayRecords } from "../src/guard/reconcile.js";
+import { contributionFromDetail, dailyTotals, kstDate, readState, recordOrder, writeState } from "../src/guard/state.js";
 import type { TossClient } from "../src/toss/client.js";
 
 const tempDir = mkdtempSync(join(tmpdir(), "tossinvest-guard-"));
@@ -250,7 +251,10 @@ describe("guardModifyOrder", () => {
       quantity: "10",
       price: "2000"
     });
-    assert.deepEqual(result, { currency: "KRW", orderType: "LIMIT", quantity: "10", price: "2000" });
+    assert.equal(result.currency, "KRW");
+    assert.equal(result.orderType, "LIMIT");
+    assert.equal(result.quantity, "10");
+    assert.equal(result.price, "2000");
   });
 
   it("preserves the existing LIMIT price when only quantity changes", async () => {
@@ -261,7 +265,10 @@ describe("guardModifyOrder", () => {
       orderId: "order-1",
       quantity: "7"
     });
-    assert.deepEqual(result, { currency: "KRW", orderType: "LIMIT", quantity: "7", price: "1000" });
+    assert.equal(result.currency, "KRW");
+    assert.equal(result.orderType, "LIMIT");
+    assert.equal(result.quantity, "7");
+    assert.equal(result.price, "1000");
   });
 
   it("builds a US replacement body with price only (no quantity)", async () => {
@@ -272,7 +279,10 @@ describe("guardModifyOrder", () => {
       orderId: "order-1",
       price: "60"
     });
-    assert.deepEqual(result, { currency: "USD", orderType: "LIMIT", quantity: undefined, price: "60" });
+    assert.equal(result.currency, "USD");
+    assert.equal(result.orderType, "LIMIT");
+    assert.equal(result.quantity, undefined);
+    assert.equal(result.price, "60");
   });
 
   it("blocks modification for US stocks when quantity is provided", async () => {
@@ -383,6 +393,209 @@ describe("guardModifyOrder", () => {
   });
 });
 
+describe("contributionFromDetail", () => {
+  const rec = (estimatedAmount = 999) =>
+    buildOrderRecord({
+      account: 1,
+      symbol: "005930",
+      side: "BUY",
+      orderType: "LIMIT",
+      currency: "KRW",
+      estimatedAmount,
+      orderId: "o1"
+    });
+
+  it("freezes a FILLED order at its filled amount", () => {
+    const c = contributionFromDetail(
+      { result: { status: "FILLED", currency: "KRW", quantity: "10", price: "1000", execution: { filledQuantity: "10", filledAmount: "10000" } } },
+      rec()
+    );
+    assert.equal(c.terminal, true);
+    assert.equal(c.filled, 10000);
+    assert.equal(c.committed, 10000);
+  });
+
+  it("releases the unfilled part of a partially filled CANCELED order", () => {
+    const c = contributionFromDetail(
+      { result: { status: "CANCELED", currency: "KRW", quantity: "10", price: "1000", execution: { filledQuantity: "3", filledAmount: "3000" } } },
+      rec()
+    );
+    assert.equal(c.terminal, true);
+    assert.equal(c.committed, 3000);
+  });
+
+  it("counts filled + open remaining for a PARTIAL_FILLED order", () => {
+    const c = contributionFromDetail(
+      { result: { status: "PARTIAL_FILLED", currency: "KRW", quantity: "10", price: "1000", execution: { filledQuantity: "4", filledAmount: "4000" } } },
+      rec()
+    );
+    assert.equal(c.terminal, false);
+    assert.equal(c.committed, 4000 + 6 * 1000);
+  });
+
+  it("treats an unknown status as still open (not terminal)", () => {
+    const c = contributionFromDetail(
+      { result: { status: "SOMETHING_NEW", currency: "KRW", quantity: "10", price: "1000", execution: { filledQuantity: "0" } } },
+      rec()
+    );
+    assert.equal(c.terminal, false);
+    assert.equal(c.committed, 10000);
+  });
+
+  it("falls back to the placement estimate when an open order has no price", () => {
+    const c = contributionFromDetail(
+      { result: { status: "PENDING", currency: "USD", quantity: "1", price: null, execution: { filledQuantity: "0" } } },
+      rec(777)
+    );
+    assert.equal(c.committed, 777);
+  });
+});
+
+describe("reconcileTodayRecords", () => {
+  function ledgerClient(map: Record<string, unknown>): TossClient {
+    return {
+      request: async ({ path }: { path: string }) => {
+        const match = path.match(/^\/api\/v1\/orders\/(.+)$/);
+        if (match) {
+          const id = decodeURIComponent(match[1]);
+          if (id in map) {
+            return map[id];
+          }
+          throw new Error(`order ${id} not found`);
+        }
+        throw new Error(`Unexpected API call: ${path}`);
+      }
+    } as unknown as TossClient;
+  }
+
+  it("freezes terminal orders and persists the cached contribution", async () => {
+    const config = makeConfig();
+    const path = config.guardStatePath!;
+    recordOrder(
+      path,
+      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "o1" })
+    );
+    const client = ledgerClient({
+      o1: { result: { status: "FILLED", currency: "KRW", quantity: "5", price: "1000", execution: { filledQuantity: "5", filledAmount: "5000" } } }
+    });
+
+    const todays = await reconcileTodayRecords(client, config);
+    assert.equal(todays.length, 1);
+    assert.equal(todays[0].terminal, true);
+    assert.equal(todays[0].committedAmount, 5000);
+
+    const reread = readState(path);
+    assert.equal(reread[0].terminal, true);
+    assert.equal(reread[0].committedAmount, 5000);
+  });
+
+  it("fails safe (throws) when an open order cannot be fetched", async () => {
+    const config = makeConfig();
+    recordOrder(
+      config.guardStatePath!,
+      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "missing" })
+    );
+    await assert.rejects(() => reconcileTodayRecords(ledgerClient({}), config), /cannot reconcile open order/);
+  });
+
+  it("ignores records from previous days without polling them", async () => {
+    const config = makeConfig();
+    const stale = buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "old" });
+    stale.date = "1999-01-01";
+    writeState(config.guardStatePath!, [stale]);
+    // throwingClient would error if reconcile tried to fetch the stale order.
+    assert.deepEqual(await reconcileTodayRecords(throwingClient, config), []);
+  });
+});
+
+describe("daily limit reconciliation", () => {
+  it("counts a reconciled open order's live amount toward the daily KRW limit", async () => {
+    const config = makeConfig({ TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW: "15000" });
+    // Seeded estimate is tiny (1); reconciliation must drive the real 10000.
+    recordOrder(
+      config.guardStatePath!,
+      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "o1" })
+    );
+    const client = {
+      request: async ({ path }: { path: string }) => {
+        if (path === "/api/v1/prices") {
+          return { result: [{ currency: "KRW" }] };
+        }
+        if (path.startsWith("/api/v1/orders/")) {
+          return { result: { status: "PENDING", currency: "KRW", quantity: "10", price: "1000", execution: { filledQuantity: "0" } } };
+        }
+        throw new Error(`Unexpected API call: ${path}`);
+      }
+    } as unknown as TossClient;
+
+    // open order 10000 + new BASE_BUY 10000 = 20000 > 15000.
+    await assert.rejects(() => guardCreateOrder(client, config, { ...BASE_BUY }), /daily KRW amount limit/);
+  });
+
+  it("excludes the replaced order's open amount from the modify daily check", async () => {
+    const config = makeConfig({ TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW: "15000" });
+    recordOrder(
+      config.guardStatePath!,
+      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "o1" })
+    );
+    const detail = {
+      result: { status: "PENDING", symbol: "005930", side: "BUY", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000", execution: { filledQuantity: "0" } }
+    };
+    const client = {
+      request: async ({ path }: { path: string }) => {
+        if (path.startsWith("/api/v1/orders/")) {
+          return detail;
+        }
+        throw new Error(`Unexpected API call: ${path}`);
+      }
+    } as unknown as TossClient;
+
+    // Replacing o1 (open 10000, filled 0) with 10000: old counts filled(0), so total 10000 <= 15000.
+    const result = await guardModifyOrder(client, config, {
+      rawAccountSeq: undefined,
+      resolvedAccountSeq: 1,
+      confirmOrderAction: true,
+      orderId: "o1",
+      quantity: "10",
+      price: "1000"
+    });
+    assert.equal(result.estimatedAmount, 10000);
+  });
+
+  it("blocks a modify whose replacement exceeds the daily KRW limit", async () => {
+    const config = makeConfig({ TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW: "15000" });
+    recordOrder(
+      config.guardStatePath!,
+      buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 1, orderId: "o1" })
+    );
+    const detail = {
+      result: { status: "PENDING", symbol: "005930", side: "BUY", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000", execution: { filledQuantity: "0" } }
+    };
+    const client = {
+      request: async ({ path }: { path: string }) => {
+        if (path.startsWith("/api/v1/orders/")) {
+          return detail;
+        }
+        throw new Error(`Unexpected API call: ${path}`);
+      }
+    } as unknown as TossClient;
+
+    // Replacement notional 10*2000 = 20000 > 15000.
+    await assert.rejects(
+      () =>
+        guardModifyOrder(client, config, {
+          rawAccountSeq: undefined,
+          resolvedAccountSeq: 1,
+          confirmOrderAction: true,
+          orderId: "o1",
+          quantity: "10",
+          price: "2000"
+        }),
+      /daily KRW amount limit/
+    );
+  });
+});
+
 describe("guardCancelOrder", () => {
   it("blocks cancel without confirmation but is not affected by sell/market settings", () => {
     assert.throws(
@@ -410,6 +623,19 @@ describe("state helpers", () => {
     assert.equal(totals.count, 2);
     assert.equal(totals.amountByCurrency.KRW, 100);
     assert.equal(totals.amountByCurrency.USD, 5);
+  });
+
+  it("prunes past-day records when appending a new one", () => {
+    const path = nextStatePath();
+    const stale = buildOrderRecord({ account: 1, symbol: "005930", side: "BUY", orderType: "LIMIT", currency: "KRW", estimatedAmount: 100 });
+    stale.date = "1999-01-01";
+    writeState(path, [stale]);
+
+    recordOrder(path, buildOrderRecord({ account: 1, symbol: "AAPL", side: "BUY", orderType: "MARKET", currency: "USD", estimatedAmount: 5 }));
+
+    const records = readState(path);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].symbol, "AAPL");
   });
 
   it("ignores records from other dates", () => {

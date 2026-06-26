@@ -340,11 +340,14 @@ async function main() {
 
     const stateRecords = JSON.parse(readFileSync(statePath, "utf8"));
     assert.ok(Array.isArray(stateRecords), "Guard state file must contain an array.");
-    assert.equal(stateRecords.length, 1, "Only the successful create should be recorded in guard state.");
+    // The create and the modify each record an order; cancel does not.
+    assert.equal(stateRecords.length, 2, "The create and the modify replacement should both be recorded.");
     assert.equal(stateRecords[0].orderId, "mock-order-created");
     assert.equal(stateRecords[0].clientOrderId, "mock-create-001");
     assert.equal(stateRecords[0].currency, "KRW");
     assert.equal(stateRecords[0].estimatedAmount, 1);
+    assert.equal(stateRecords[1].orderId, "mock-order-replaced", "The modify replacement order should be recorded.");
+    assert.equal(stateRecords[1].currency, "KRW");
 
     // Second server with sell + market enabled: verify those paths reach the order API.
     const stateDir2 = mkdtempSync(join(tmpdir(), "tossinvest-smoke2-"));

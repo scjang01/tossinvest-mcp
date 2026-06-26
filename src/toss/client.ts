@@ -78,8 +78,7 @@ export class TossClient {
       throw normalizeOAuthTokenError(response.status, payload, response.headers.get("X-Request-Id"));
     }
 
-    const token = payload as TokenResponse;
-    if (!isTokenResponse(token)) {
+    if (!isTokenResponse(payload)) {
       throw new TossApiError("Invalid OAuth token response from Toss API.", {
         status: response.status,
         code: "invalid-token-response",
@@ -89,6 +88,7 @@ export class TossClient {
       });
     }
 
+    const token = payload;
     const expiresInMs = (token.expires_in ?? 3600) * 1000;
 
     this.tokenState = {
@@ -147,8 +147,13 @@ async function safeFetch(input: URL | string, init: RequestInit): Promise<Respon
   }
 }
 
-function isTokenResponse(value: TokenResponse): value is TokenResponse & { access_token: string } {
-  return typeof value.access_token === "string" && value.access_token.length > 0;
+function isTokenResponse(value: unknown): value is TokenResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { access_token?: unknown }).access_token === "string" &&
+    (value as { access_token: string }).access_token.length > 0
+  );
 }
 
 async function readJson(response: Response): Promise<unknown> {

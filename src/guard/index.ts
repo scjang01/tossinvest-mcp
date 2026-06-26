@@ -1,17 +1,18 @@
 import type { Config } from "../config.js";
 import type { TossClient } from "../toss/client.js";
-import { toFiniteNumber, type Currency } from "./currency.js";
+import { type Currency } from "./currency.js";
 import { estimateOrderAmount, fetchSymbolCurrency } from "./estimate.js";
-import { dailyTotals, kstDate, readState, recordOrder, resolveStatePath, type OrderRecord } from "./state.js";
+import { reconcileTodayRecords } from "./reconcile.js";
+import { contributionOf, kstDate, recordOrder, resolveStatePath, type OrderRecord } from "./state.js";
 
-export { resolveStatePath, recordOrder, kstDate } from "./state.js";
+export { resolveStatePath, recordOrder } from "./state.js";
 export type { OrderRecord } from "./state.js";
 
-// In-process serialization for the order-creation critical section
-// (daily-limit check -> place order -> record state). Without this, two
-// concurrent create calls could both read the same pre-order state, both pass
-// the daily limit, and both place orders (TOCTOU). Order throughput is not a
-// concern here, so a strict global queue is the proportionate fix.
+// In-process serialization for order-mutating critical sections (daily-limit
+// check -> place order -> record state). Without this, two concurrent calls
+// could both read the same pre-order state, both pass the daily limit, and both
+// place orders (TOCTOU). Order throughput is not a concern here, so a strict
+// global queue is the proportionate fix.
 let orderChain: Promise<unknown> = Promise.resolve();
 export function withOrderLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = orderChain.then(fn, fn);
@@ -52,6 +53,11 @@ export type ModifyGuardResult = {
   quantity?: string;
   /** Price to send: present for LIMIT, omitted for MARKET (MARKET modify forbids price). */
   price?: string;
+  /** Estimated notional of the replacement order, for daily-limit accounting. */
+  estimatedAmount: number;
+  /** Symbol / side read from the existing order, for recording the replacement. */
+  symbol?: string;
+  side?: "BUY" | "SELL";
 };
 
 export type CancelGuardInput = {
@@ -94,7 +100,7 @@ export async function guardCreateOrder(
   const currency = estimate.currency ?? (await fetchSymbolCurrency(client, input.symbol));
 
   assertSingleOrderLimit(config, currency, estimate.amount);
-  assertDailyLimits(config, currency, estimate.amount);
+  await assertDailyLimits(client, config, currency, estimate.amount);
 
   return { currency, estimatedAmount: estimate.amount };
 }
@@ -105,11 +111,13 @@ export async function guardCreateOrder(
  * Toss modify replaces the original order, so the request must carry `orderType`
  * (required) and, depending on market/type, quantity and price. We always fetch
  * the existing order to read authoritative values (currency, orderType, original
- * quantity/price) and enforce KR/US and LIMIT/MARKET rules from the OpenAPI spec:
+ * quantity/price, symbol, side) and enforce KR/US and LIMIT/MARKET rules from the
+ * OpenAPI spec:
  *  - KR: quantity required (positive integer). US: quantity forbidden.
  *  - LIMIT: price required. MARKET: price forbidden.
- * Fields the caller doesn't change are filled from the existing order so the
- * replacement preserves intent. Values are read from Toss, never inferred.
+ * The replacement is treated as a new order for accounting: it is subject to the
+ * single-order and daily limits, and the order it replaces is counted at its
+ * filled-only amount (its open part is being carried by the replacement).
  */
 export async function guardModifyOrder(
   client: TossClient,
@@ -171,21 +179,32 @@ export async function guardModifyOrder(
     }
   }
 
-  // Single-order amount limit (when configured), using the effective replacement values.
-  if (config.maxOrderAmountKrw !== undefined || config.maxOrderAmountUsd !== undefined) {
-    const effectiveQuantity = toFiniteNumber(bodyQuantity) ?? toFiniteNumber(readField(detail, "quantity"));
-    const effectivePrice = toFiniteNumber(bodyPrice) ?? toFiniteNumber(readField(detail, "price"));
+  const symbol = readStringField(detail, "symbol");
+  const detailSide = readField(detail, "side");
+  const side = detailSide === "BUY" || detailSide === "SELL" ? detailSide : undefined;
 
-    if (effectiveQuantity === undefined || effectivePrice === undefined) {
-      throw new Error(
-        `Order blocked: cannot determine the resulting quantity and price for modifying order ${input.orderId}; amount limit cannot be verified.`
-      );
+  // Estimate the replacement notional for limit checks and accounting. Required
+  // when any amount limit is configured; otherwise best-effort (reconciliation
+  // refines it later via the recorded orderId).
+  const amountChecksConfigured =
+    config.maxOrderAmountKrw !== undefined ||
+    config.maxOrderAmountUsd !== undefined ||
+    config.dailyMaxOrderAmountKrw !== undefined ||
+    config.dailyMaxOrderAmountUsd !== undefined;
+
+  let estimatedAmount = 0;
+  try {
+    estimatedAmount = await estimateModifyAmount(client, config, detail, orderType, bodyQuantity, bodyPrice);
+  } catch (error) {
+    if (amountChecksConfigured) {
+      throw error;
     }
-
-    assertSingleOrderLimit(config, currency, effectiveQuantity * effectivePrice);
   }
 
-  return { currency, orderType, quantity: bodyQuantity, price: bodyPrice };
+  assertSingleOrderLimit(config, currency, estimatedAmount);
+  await assertDailyLimits(client, config, currency, estimatedAmount, { replaceOrderId: input.orderId });
+
+  return { currency, orderType, quantity: bodyQuantity, price: bodyPrice, estimatedAmount, symbol, side };
 }
 
 /** Enforce cancel-order guardrails: confirmation and account lock only. */
@@ -223,7 +242,20 @@ function assertSingleOrderLimit(config: Config, currency: Currency, amount: numb
   }
 }
 
-function assertDailyLimits(config: Config, currency: Currency, amount: number): void {
+/**
+ * Enforce daily count and per-currency amount limits. The daily total is the sum
+ * of today's reconciled order contributions (see reconcileTodayRecords): each
+ * open order is re-priced from the live Toss state, each terminal order counts
+ * its filled amount only. When modifying, replaceOrderId names the order being
+ * replaced so its open part is excluded (the new estimate carries it).
+ */
+async function assertDailyLimits(
+  client: TossClient,
+  config: Config,
+  currency: Currency,
+  addedAmount: number,
+  options: { replaceOrderId?: string } = {}
+): Promise<void> {
   if (
     config.dailyMaxOrderCount === undefined &&
     config.dailyMaxOrderAmountKrw === undefined &&
@@ -232,21 +264,76 @@ function assertDailyLimits(config: Config, currency: Currency, amount: number): 
     return;
   }
 
-  const today = kstDate();
-  const totals = dailyTotals(readState(resolveStatePath(config)), today);
+  const todays = await reconcileTodayRecords(client, config);
 
-  if (config.dailyMaxOrderCount !== undefined && totals.count + 1 > config.dailyMaxOrderCount) {
+  if (config.dailyMaxOrderCount !== undefined && todays.length + 1 > config.dailyMaxOrderCount) {
     throw new Error(
-      `Order blocked: daily order count limit reached (${totals.count}/${config.dailyMaxOrderCount} orders today via this MCP).`
+      `Order blocked: daily order count limit reached (${todays.length}/${config.dailyMaxOrderCount} orders today via this MCP).`
     );
   }
 
   const dailyAmountLimit = currency === "KRW" ? config.dailyMaxOrderAmountKrw : config.dailyMaxOrderAmountUsd;
-  if (dailyAmountLimit !== undefined && totals.amountByCurrency[currency] + amount > dailyAmountLimit) {
+  if (dailyAmountLimit === undefined) {
+    return;
+  }
+
+  let used = 0;
+  for (const record of todays) {
+    if (record.currency !== currency) {
+      continue;
+    }
+    if (options.replaceOrderId !== undefined && record.orderId === options.replaceOrderId) {
+      // This order is being replaced: count only what already filled; its open
+      // amount is represented by the replacement (addedAmount).
+      used += record.filledAmount ?? 0;
+    } else {
+      used += contributionOf(record);
+    }
+  }
+
+  if (used + addedAmount > dailyAmountLimit) {
     throw new Error(
-      `Order blocked: daily ${currency} amount limit reached (${formatAmount(totals.amountByCurrency[currency], currency)} used + ${formatAmount(amount, currency)} > ${formatAmount(dailyAmountLimit, currency)}).`
+      `Order blocked: daily ${currency} amount limit reached (${formatAmount(used, currency)} used + ${formatAmount(addedAmount, currency)} > ${formatAmount(dailyAmountLimit, currency)}).`
     );
   }
+}
+
+/**
+ * Estimate the notional of a modify's replacement order, reusing the same logic
+ * as create. LIMIT uses quantity * price; MARKET reads the orderbook (and needs
+ * the symbol/side from the existing order). Unchanged fields come from the order.
+ */
+async function estimateModifyAmount(
+  client: TossClient,
+  config: Config,
+  detail: unknown,
+  orderType: "LIMIT" | "MARKET",
+  bodyQuantity: string | undefined,
+  bodyPrice: string | undefined
+): Promise<number> {
+  const quantity = bodyQuantity ?? readStringField(detail, "quantity");
+
+  if (orderType === "LIMIT") {
+    const price = bodyPrice ?? readStringField(detail, "price");
+    const estimate = await estimateOrderAmount(
+      client,
+      { symbol: "", side: "BUY", orderType: "LIMIT", quantity, price },
+      { marketOrderBufferPct: config.marketOrderBufferPct }
+    );
+    return estimate.amount;
+  }
+
+  const symbol = readStringField(detail, "symbol");
+  const detailSide = readField(detail, "side");
+  if (symbol === undefined || (detailSide !== "BUY" && detailSide !== "SELL")) {
+    throw new Error("Order blocked: cannot determine the symbol/side of the order to estimate the modified amount.");
+  }
+  const estimate = await estimateOrderAmount(
+    client,
+    { symbol, side: detailSide, orderType: "MARKET", quantity },
+    { marketOrderBufferPct: config.marketOrderBufferPct }
+  );
+  return estimate.amount;
 }
 
 export function buildOrderRecord(params: {
