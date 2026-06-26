@@ -1,6 +1,6 @@
 {
   "name": "tossinvest-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Model Context Protocol (MCP) server for Toss Securities Open API",
   "type": "module",
   "main": "dist/index.js",
