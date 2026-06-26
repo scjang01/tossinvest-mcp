@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { formatToolError, normalizeTossError, TossNetworkError } from "../src/toss/errors.js";
+import { formatToolError, normalizeOAuthTokenError, normalizeTossError, TossNetworkError } from "../src/toss/errors.js";
 
 describe("Toss error handling", () => {
   it("normalizes Toss error envelope with request id fallback", () => {
@@ -44,6 +44,27 @@ describe("Toss error handling", () => {
     assert.equal(error.status, 502);
     assert.equal(error.requestId, "request-id");
     assert.deepEqual(error.data, { raw: "bad gateway" });
+  });
+
+  it("parses the OAuth2 token error shape ({ error, error_description })", () => {
+    const error = normalizeOAuthTokenError(
+      401,
+      { error: "invalid_client", error_description: "Client authentication failed." },
+      "req-1"
+    );
+
+    assert.equal(error.status, 401);
+    assert.equal(error.code, "invalid_client");
+    assert.equal(error.message, "Client authentication failed.");
+    assert.equal(error.requestId, "req-1");
+    assert.deepEqual(error.data, { error: "invalid_client", error_description: "Client authentication failed." });
+    assert.match(error.hint ?? "", /API Key/);
+  });
+
+  it("falls back to the common normalizer when the token body is an envelope", () => {
+    const error = normalizeOAuthTokenError(500, { error: { code: "server-error", message: "boom" } }, null);
+    assert.equal(error.code, "server-error");
+    assert.equal(error.message, "boom");
   });
 
   it("formats network errors as structured JSON", () => {

@@ -3,6 +3,16 @@ import { z } from "zod";
 
 import type { Config } from "../config.js";
 import { resolveAccountSeq } from "../config.js";
+import {
+  buildOrderRecord,
+  generateClientOrderId,
+  guardCancelOrder,
+  guardCreateOrder,
+  guardModifyOrder,
+  recordOrder,
+  resolveStatePath,
+  withOrderLock
+} from "../guard/index.js";
 import type { TossClient } from "../toss/client.js";
 import {
   accountInputSchema,
@@ -74,19 +84,22 @@ function registerOrderHistoryTools(server: McpServer, client: TossClient, config
 }
 
 function registerTradingTools(server: McpServer, client: TossClient, config: Config): void {
-  const confirmOrderActionSchema = config.yoloTrading
-    ? z.boolean().optional().describe("Optional only when TOSSINVEST_YOLO_TRADING=true. Otherwise true is required.")
-    : z.literal(true);
-  const confirmationDescription = config.yoloTrading
-    ? "TOSSINVEST_YOLO_TRADING=true is enabled, so confirmOrderAction is optional. This can place real orders without a per-call confirmation flag."
-    : "Requires confirmOrderAction=true.";
+  const confirmOrderActionSchema = config.requireOrderConfirmation
+    ? z.literal(true).describe("Required: set true to confirm the exact order before submitting.")
+    : z
+        .boolean()
+        .optional()
+        .describe("Optional because TOSSINVEST_REQUIRE_ORDER_CONFIRMATION=false. Other guardrails still apply.");
+  const confirmationDescription = config.requireOrderConfirmation
+    ? "Requires confirmOrderAction=true."
+    : "TOSSINVEST_REQUIRE_ORDER_CONFIRMATION=false, so confirmOrderAction is optional; remaining guardrails still apply.";
 
   server.registerTool(
     "toss_create_order",
     {
       title: "Toss Create Order",
       description:
-        `Create a real stock order. ${confirmationDescription} For LIMIT orders, price is required. Provide exactly one of quantity (shares) or orderAmount (US MARKET only, regular hours). Toss has no sandbox environment.`,
+        `Create a real stock order. ${confirmationDescription} For LIMIT orders, price is required. Provide exactly one of quantity (shares) or orderAmount (US MARKET only, regular hours). Server-side guardrails may block this order. Toss has no sandbox environment.`,
       inputSchema: {
         ...accountInputSchema,
         confirmOrderAction: confirmOrderActionSchema,
@@ -95,23 +108,73 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
         side: z.enum(["BUY", "SELL"]),
         orderType: z.enum(["LIMIT", "MARKET"]),
         timeInForce: z.enum(["DAY", "CLS"]).optional(),
-        quantity: z.string().regex(/^\d+$/).max(30).optional(),
+        quantity: z.string().regex(/^\d+(\.\d+)?$/).max(30).optional(),
         price: z.string().regex(/^\d+(\.\d+)?$/).max(30).optional(),
         orderAmount: z.string().regex(/^\d+(\.\d+)?$/).max(30).optional(),
         confirmHighValueOrder: z.boolean().optional()
       }
     },
     (input) =>
-      runTool(() => {
-        const parsed = orderCreateSchema.parse(applyYoloConfirmation(input, config));
+      runTool(async () => {
+        const parsed = orderCreateSchema.parse(input);
         const accountSeq = resolveAccountSeq(parsed.accountSeq, config.defaultAccountSeq);
-        const body = withoutKeys(parsed, ["accountSeq", "confirmOrderAction"]);
 
-        return client.request({
+        // Serialize the daily-check -> place -> record critical section.
+        return withOrderLock(async () => {
+        const guardResult = await guardCreateOrder(client, config, {
+          rawAccountSeq: parsed.accountSeq,
+          resolvedAccountSeq: accountSeq,
+          confirmOrderAction: parsed.confirmOrderAction,
+          symbol: parsed.symbol,
+          side: parsed.side,
+          orderType: parsed.orderType,
+          quantity: "quantity" in parsed ? parsed.quantity : undefined,
+          price: "price" in parsed ? parsed.price : undefined,
+          orderAmount: "orderAmount" in parsed ? parsed.orderAmount : undefined
+        });
+
+        const clientOrderId = parsed.clientOrderId ?? generateClientOrderId();
+        const body = { ...withoutKeys(parsed, ["accountSeq", "confirmOrderAction"]), clientOrderId };
+
+        const response = await client.request<unknown>({
           method: "POST",
           path: "/api/v1/orders",
           accountSeq,
           body
+        });
+
+        // The order has been placed. Recording guard state must NOT be able to
+        // turn this success into an error response — otherwise the user may
+        // retry and place a duplicate order (a fresh clientOrderId means no
+        // idempotency protection). Isolate any recording failure as a warning.
+        try {
+          recordOrder(
+            resolveStatePath(config),
+            buildOrderRecord({
+              account: accountSeq,
+              symbol: parsed.symbol,
+              side: parsed.side,
+              orderType: parsed.orderType,
+              currency: guardResult.currency,
+              estimatedAmount: guardResult.estimatedAmount,
+              orderId: extractOrderId(response),
+              clientOrderId
+            })
+          );
+        } catch (recordError) {
+          const message = recordError instanceof Error ? recordError.message : String(recordError);
+          console.error(`[guard] order placed but guard-state recording failed: ${message}`);
+          if (response !== null && typeof response === "object" && !Array.isArray(response)) {
+            return {
+              ...(response as Record<string, unknown>),
+              _guardStateWarning:
+                `Order was placed successfully (clientOrderId=${clientOrderId}), but recording guard state failed: ${message}. ` +
+                "Daily limits may undercount this order. Do NOT retry — the order already exists."
+            };
+          }
+        }
+
+        return response;
         });
       })
   );
@@ -121,21 +184,44 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
     {
       title: "Toss Modify Order",
       description:
-        `Modify a real stock order. This is not an in-place PATCH: Toss replaces the original order and returns a new orderId. Store and use the returned orderId for later detail, modify, or cancel calls. ${confirmationDescription}`,
+        `Modify a real stock order. This is not an in-place PATCH: Toss replaces the original order and returns a new orderId. Store and use the returned orderId for later detail, modify, or cancel calls. For KR stocks, quantity is required. For US stocks, quantity must not be provided (only price modification is supported). orderType is optional and defaults to the existing order's type. ${confirmationDescription}`,
       inputSchema: {
         ...accountInputSchema,
         confirmOrderAction: confirmOrderActionSchema,
         orderId: z.string().min(1),
+        orderType: z.enum(["LIMIT", "MARKET"]).optional(),
         quantity: z.string().regex(/^\d+$/).max(30).optional(),
         price: z.string().regex(/^\d+(\.\d+)?$/).max(30).optional(),
         confirmHighValueOrder: z.boolean().optional()
       }
     },
     (input) =>
-      runTool(() => {
-        const parsed = orderModifySchema.parse(applyYoloConfirmation(input, config));
+      runTool(async () => {
+        const parsed = orderModifySchema.parse(input);
         const accountSeq = resolveAccountSeq(parsed.accountSeq, config.defaultAccountSeq);
-        const body = withoutKeys(parsed, ["accountSeq", "confirmOrderAction", "orderId"]);
+
+        const guardResult = await guardModifyOrder(client, config, {
+          rawAccountSeq: parsed.accountSeq,
+          resolvedAccountSeq: accountSeq,
+          confirmOrderAction: parsed.confirmOrderAction,
+          orderId: parsed.orderId,
+          orderType: parsed.orderType,
+          quantity: parsed.quantity,
+          price: parsed.price
+        });
+
+        // Build the replacement body from guard-resolved, spec-compliant values.
+        // orderType is required by Toss; quantity/price are included only when allowed.
+        const body: Record<string, unknown> = { orderType: guardResult.orderType };
+        if (guardResult.quantity !== undefined) {
+          body.quantity = guardResult.quantity;
+        }
+        if (guardResult.price !== undefined) {
+          body.price = guardResult.price;
+        }
+        if (parsed.confirmHighValueOrder !== undefined) {
+          body.confirmHighValueOrder = parsed.confirmHighValueOrder;
+        }
 
         return client.request({
           method: "POST",
@@ -159,26 +245,35 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
       }
     },
     (input) =>
-      runTool(() => {
-        const parsed = orderCancelSchema.parse(applyYoloConfirmation(input, config));
+      runTool(async () => {
+        const parsed = orderCancelSchema.parse(input);
         const accountSeq = resolveAccountSeq(parsed.accountSeq, config.defaultAccountSeq);
+
+        guardCancelOrder(config, {
+          rawAccountSeq: parsed.accountSeq,
+          confirmOrderAction: parsed.confirmOrderAction
+        });
 
         return client.request({
           method: "POST",
           path: `/api/v1/orders/${encodeURIComponent(parsed.orderId)}/cancel`,
-          accountSeq
+          accountSeq,
+          // Toss requires Content-Type: application/json on POST; send an empty
+          // JSON body so the header is set even though cancel has no fields.
+          body: {}
         });
       })
   );
 }
 
-function applyYoloConfirmation(input: unknown, config: Config): unknown {
-  if (!config.yoloTrading || typeof input !== "object" || input === null || Array.isArray(input)) {
-    return input;
+function extractOrderId(response: unknown): string | undefined {
+  if (response === null || typeof response !== "object") {
+    return undefined;
   }
-
-  return {
-    confirmOrderAction: true,
-    ...input
-  };
+  const root = (response as Record<string, unknown>).result ?? response;
+  if (root === null || typeof root !== "object") {
+    return undefined;
+  }
+  const orderId = (root as Record<string, unknown>).orderId;
+  return typeof orderId === "string" ? orderId : undefined;
 }

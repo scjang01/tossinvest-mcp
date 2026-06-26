@@ -4,8 +4,8 @@ import { describe, it } from "node:test";
 import { orderCreateSchema, orderModifySchema } from "../src/toss/schemas.js";
 
 describe("order schemas", () => {
-  it("requires explicit confirmation for order creation", () => {
-    assert.throws(() =>
+  it("treats confirmation as optional at the schema level (enforced by the guard)", () => {
+    assert.doesNotThrow(() =>
       orderCreateSchema.parse({
         symbol: "005930",
         side: "BUY",
@@ -43,11 +43,77 @@ describe("order schemas", () => {
     assert.equal(parsed.orderAmount, "100.5");
   });
 
-  it("requires explicit confirmation for order modification", () => {
+  it("rejects an order carrying both quantity and orderAmount (no silent reinterpretation)", () => {
+    assert.throws(() =>
+      orderCreateSchema.parse({
+        confirmOrderAction: true,
+        symbol: "AAPL",
+        side: "BUY",
+        orderType: "MARKET",
+        quantity: "10",
+        orderAmount: "100"
+      })
+    );
+  });
+
+  it("rejects a LIMIT order that also carries orderAmount", () => {
+    assert.throws(() =>
+      orderCreateSchema.parse({
+        confirmOrderAction: true,
+        symbol: "005930",
+        side: "BUY",
+        orderType: "LIMIT",
+        quantity: "10",
+        price: "70000",
+        orderAmount: "100"
+      })
+    );
+  });
+
+  it("rejects unknown keys", () => {
+    assert.throws(() =>
+      orderCreateSchema.parse({
+        confirmOrderAction: true,
+        symbol: "005930",
+        side: "BUY",
+        orderType: "LIMIT",
+        quantity: "10",
+        price: "70000",
+        bogusKey: "x"
+      })
+    );
+  });
+
+  it("rejects a MARKET order carrying price (spec: MARKET forbids price)", () => {
+    assert.throws(() =>
+      orderCreateSchema.parse({
+        confirmOrderAction: true,
+        symbol: "AAPL",
+        side: "BUY",
+        orderType: "MARKET",
+        quantity: "1",
+        price: "100"
+      })
+    );
+  });
+
+  it("rejects an amount-based order carrying timeInForce (not in the amount-based spec schema)", () => {
+    assert.throws(() =>
+      orderCreateSchema.parse({
+        confirmOrderAction: true,
+        symbol: "AAPL",
+        side: "SELL",
+        orderType: "MARKET",
+        timeInForce: "DAY",
+        orderAmount: "100"
+      })
+    );
+  });
+
+  it("requires a non-empty orderId for modification", () => {
     assert.throws(() =>
       orderModifySchema.parse({
-        orderId: "order-1",
-        orderType: "LIMIT",
+        orderId: "",
         price: "71000"
       })
     );

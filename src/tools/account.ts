@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import { resolveAccountSeq } from "../config.js";
 import type { TossClient } from "../toss/client.js";
-import { accountInputSchema, symbolSchema } from "../toss/schemas.js";
+import { accountInputSchema, symbolSchema, currencySchema } from "../toss/schemas.js";
 import { runTool } from "./common.js";
 
 export function registerAccountTools(server: McpServer, client: TossClient, config: Config): void {
@@ -41,18 +41,18 @@ export function registerAccountTools(server: McpServer, client: TossClient, conf
     "toss_get_buying_power",
     {
       title: "Toss Get Buying Power",
-      description: "Get available buying power for an account. symbol is optional and used for market-specific fee calculation.",
+      description: "Get available buying power for an account. currency is required (KRW or USD).",
       inputSchema: {
         ...accountInputSchema,
-        symbol: symbolSchema.optional()
+        currency: currencySchema.describe("Currency code: KRW or USD")
       }
     },
-    ({ accountSeq, symbol }) =>
+    ({ accountSeq, currency }) =>
       runTool(() =>
         client.request({
           path: "/api/v1/buying-power",
           accountSeq: resolveAccountSeq(accountSeq, config.defaultAccountSeq),
-          query: { symbol }
+          query: { currency }
         })
       )
   );

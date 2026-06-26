@@ -1,6 +1,6 @@
 import type { Config } from "../config.js";
 import { MAX_RATE_LIMIT_RETRIES, MAX_RATE_LIMIT_TOTAL_WAIT_MS, parseRetryAfterMs, sleep } from "../utils/retry.js";
-import { normalizeTossError, TossApiError, TossNetworkError } from "./errors.js";
+import { normalizeOAuthTokenError, normalizeTossError, TossApiError, TossNetworkError } from "./errors.js";
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
@@ -75,7 +75,7 @@ export class TossClient {
     const payload = await readJson(response);
 
     if (!response.ok) {
-      throw normalizeTossError(response.status, payload, response.headers.get("X-Request-Id"));
+      throw normalizeOAuthTokenError(response.status, payload, response.headers.get("X-Request-Id"));
     }
 
     const token = payload as TokenResponse;
