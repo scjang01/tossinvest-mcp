@@ -81,11 +81,13 @@ async function handleRequest(req, res) {
     ) {
       requireAuth(req);
       requireAccount(req);
-      // KR order detail used by the modify guard to enforce KR/US quantity rules.
+      // KR order detail used by the modify guard to enforce KR/US quantity rules
+      // and the market/sell/allowlist guardrails (side is a required Order field).
       return sendJson(res, 200, {
         result: {
           orderId: url.pathname.split("/").pop(),
           symbol: "005930",
+          side: "BUY",
           currency: "KRW",
           orderType: "LIMIT",
           quantity: "1",

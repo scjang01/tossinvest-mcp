@@ -183,6 +183,40 @@ export async function guardModifyOrder(
   const detailSide = readField(detail, "side");
   const side = detailSide === "BUY" || detailSide === "SELL" ? detailSide : undefined;
 
+  // A modify REPLACES the original with a new order, so the same categorical
+  // create guardrails must hold for the replacement — otherwise a modify could
+  // place an order that create would have blocked (e.g. flipping a LIMIT order
+  // to MARKET while market orders are disabled, enlarging a SELL while sells are
+  // disabled, or modifying a symbol outside the allowlist). When the guardrail is
+  // active but the relevant order field cannot be read, we block rather than guess.
+  if (orderType === "MARKET" && !config.allowMarketOrders) {
+    throw new Error(
+      "Order blocked: market orders are disabled. Set TOSSINVEST_ALLOW_MARKET_ORDERS=true to allow them."
+    );
+  }
+
+  if (!config.allowSellOrders) {
+    if (side === undefined) {
+      throw new Error(
+        `Order blocked: cannot determine the side of order ${input.orderId}; refusing to modify while sell orders are disabled.`
+      );
+    }
+    if (side === "SELL") {
+      throw new Error(
+        "Order blocked: sell orders are disabled. Set TOSSINVEST_ALLOW_SELL_ORDERS=true to allow them."
+      );
+    }
+  }
+
+  if (config.allowedSymbols) {
+    if (symbol === undefined) {
+      throw new Error(
+        `Order blocked: cannot determine the symbol of order ${input.orderId}; refusing to modify against TOSSINVEST_ALLOWED_SYMBOLS.`
+      );
+    }
+    assertSymbolAllowed(config, symbol);
+  }
+
   // Estimate the replacement notional for limit checks and accounting. Required
   // when any amount limit is configured; otherwise best-effort (reconciliation
   // refines it later via the recorded orderId).

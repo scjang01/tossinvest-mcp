@@ -259,8 +259,8 @@ describe("guardCreateOrder", () => {
 });
 
 describe("guardModifyOrder", () => {
-  const krLimit = { result: { symbol: "005930", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000" } };
-  const usLimit = { result: { symbol: "AAPL", currency: "USD", orderType: "LIMIT", quantity: "5", price: "50" } };
+  const krLimit = { result: { symbol: "005930", side: "BUY", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000" } };
+  const usLimit = { result: { symbol: "AAPL", side: "BUY", currency: "USD", orderType: "LIMIT", quantity: "5", price: "50" } };
 
   it("builds a KR replacement body with orderType and explicit quantity/price", async () => {
     const result = await guardModifyOrder(clientReturning(krLimit), makeConfig(), {
@@ -393,6 +393,90 @@ describe("guardModifyOrder", () => {
           orderId: "order-1"
         }),
       /exceeds the per-order limit/
+    );
+  });
+
+  it("blocks flipping a LIMIT order to MARKET when market orders are disabled", async () => {
+    // Bypass guard: modify must not place a market order that create would block.
+    await assert.rejects(
+      () =>
+        guardModifyOrder(clientReturning(krLimit), makeConfig(), {
+          rawAccountSeq: undefined,
+          resolvedAccountSeq: 1,
+          confirmOrderAction: true,
+          orderId: "order-1",
+          orderType: "MARKET",
+          quantity: "10"
+        }),
+      /market orders are disabled/
+    );
+  });
+
+  it("allows flipping to MARKET when market orders are enabled", async () => {
+    const config = makeConfig({ TOSSINVEST_ALLOW_MARKET_ORDERS: "true" });
+    const client = {
+      request: async ({ path }: { path: string }) => {
+        if (path === "/api/v1/orders/order-1") return krLimit;
+        if (path === "/api/v1/orderbook") return { result: { currency: "KRW", asks: [{ price: "1000" }], bids: [{ price: "999" }] } };
+        throw new Error(`Unexpected API call: ${path}`);
+      }
+    } as unknown as TossClient;
+    const result = await guardModifyOrder(client, config, {
+      rawAccountSeq: undefined,
+      resolvedAccountSeq: 1,
+      confirmOrderAction: true,
+      orderId: "order-1",
+      orderType: "MARKET",
+      quantity: "10"
+    });
+    assert.equal(result.orderType, "MARKET");
+  });
+
+  it("blocks modifying a SELL order when sell orders are disabled", async () => {
+    const krSell = { result: { symbol: "005930", side: "SELL", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000" } };
+    await assert.rejects(
+      () =>
+        guardModifyOrder(clientReturning(krSell), makeConfig(), {
+          rawAccountSeq: undefined,
+          resolvedAccountSeq: 1,
+          confirmOrderAction: true,
+          orderId: "order-1",
+          quantity: "10",
+          price: "1000"
+        }),
+      /sell orders are disabled/
+    );
+  });
+
+  it("blocks modifying a symbol outside the allowlist", async () => {
+    const config = makeConfig({ TOSSINVEST_ALLOWED_SYMBOLS: "AAPL" });
+    await assert.rejects(
+      () =>
+        guardModifyOrder(clientReturning(krLimit), config, {
+          rawAccountSeq: undefined,
+          resolvedAccountSeq: 1,
+          confirmOrderAction: true,
+          orderId: "order-1",
+          quantity: "10",
+          price: "1000"
+        }),
+      /not in TOSSINVEST_ALLOWED_SYMBOLS/
+    );
+  });
+
+  it("blocks modifying when sells are disabled and the order side cannot be read", async () => {
+    const noSide = { result: { symbol: "005930", currency: "KRW", orderType: "LIMIT", quantity: "10", price: "1000" } };
+    await assert.rejects(
+      () =>
+        guardModifyOrder(clientReturning(noSide), makeConfig(), {
+          rawAccountSeq: undefined,
+          resolvedAccountSeq: 1,
+          confirmOrderAction: true,
+          orderId: "order-1",
+          quantity: "10",
+          price: "1000"
+        }),
+      /cannot determine the side/
     );
   });
 
