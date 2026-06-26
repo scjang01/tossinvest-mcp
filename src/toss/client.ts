@@ -4,6 +4,12 @@ import { normalizeOAuthTokenError, normalizeTossError, TossApiError, TossNetwork
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
+// Per-request wall-clock timeout. Without it a hung connection or a stalled
+// response would block the MCP tool (and, on the order path, the pre-order
+// reconciliation) indefinitely. Applied fresh on every attempt so rate-limit
+// retries each get a full budget.
+const REQUEST_TIMEOUT_MS = 20_000;
+
 type TokenState = {
   accessToken: string;
   expiresAt: number;
@@ -141,8 +147,15 @@ export class TossClient {
 
 async function safeFetch(input: URL | string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    // Fresh timeout signal per call so retries are not aborted by an earlier one.
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw new TossNetworkError(`Toss Open API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`, {
+        cause: error,
+        hint: "토스증권 Open API 응답이 지연되었습니다. 네트워크 상태를 확인하고 잠시 후 다시 시도하세요."
+      });
+    }
     throw new TossNetworkError("Failed to connect to Toss Open API.", { cause: error });
   }
 }

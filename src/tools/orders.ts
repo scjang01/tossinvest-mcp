@@ -147,7 +147,8 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
           // turn this success into an error response — otherwise the user may
           // retry and place a duplicate order (a fresh clientOrderId means no
           // idempotency protection). Isolate any recording failure as a warning.
-          return recordOrSurfaceWarning(config, response, `clientOrderId=${clientOrderId}`, () =>
+          const orderId = extractOrderId(response);
+          return recordOrSurfaceWarning(config, response, `clientOrderId=${clientOrderId}`, orderId, () =>
             buildOrderRecord({
               account: accountSeq,
               symbol: parsed.symbol,
@@ -155,7 +156,7 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
               orderType: parsed.orderType,
               currency: guardResult.currency,
               estimatedAmount: guardResult.estimatedAmount,
-              orderId: extractOrderId(response),
+              orderId,
               clientOrderId
             })
           );
@@ -220,7 +221,8 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
           // replacement is tracked for daily limits. The original order will show as
           // REPLACED on the next reconciliation and freeze at its filled amount.
           // As with create, a recording failure must never undo a placed modify.
-          return recordOrSurfaceWarning(config, response, `modified orderId=${parsed.orderId}`, () =>
+          const newOrderId = extractOrderId(response);
+          return recordOrSurfaceWarning(config, response, `modified orderId=${parsed.orderId}`, newOrderId, () =>
             buildOrderRecord({
               account: accountSeq,
               symbol: guardResult.symbol ?? "",
@@ -228,7 +230,7 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
               orderType: guardResult.orderType,
               currency: guardResult.currency,
               estimatedAmount: guardResult.estimatedAmount,
-              orderId: extractOrderId(response)
+              orderId: newOrderId
             })
           );
         });
@@ -275,27 +277,48 @@ function registerTradingTools(server: McpServer, client: TossClient, config: Con
  * response (the caller could otherwise retry and place a duplicate, since a fresh
  * clientOrderId carries no idempotency). On failure we log and, when the response
  * is an object, attach a _guardStateWarning instead of throwing.
+ *
+ * Two non-fatal conditions are surfaced as warnings (never as errors):
+ *  - recording the guard-state entry threw (e.g. unwritable state file);
+ *  - the placed order's orderId could not be read from the response, so the
+ *    record cannot be reconciled against live state and stays at its estimate.
  */
 function recordOrSurfaceWarning(
   config: Config,
   response: unknown,
   reference: string,
+  orderId: string | undefined,
   buildRecord: () => Parameters<typeof recordOrder>[1]
 ): unknown {
+  const warnings: string[] = [];
+
   try {
     recordOrder(resolveStatePath(config), buildRecord());
   } catch (recordError) {
     const message = recordError instanceof Error ? recordError.message : String(recordError);
     console.error(`[guard] order placed but guard-state recording failed: ${message}`);
-    if (response !== null && typeof response === "object" && !Array.isArray(response)) {
-      return {
-        ...(response as Record<string, unknown>),
-        _guardStateWarning:
-          `Order was placed successfully (${reference}), but recording guard state failed: ${message}. ` +
-          "Daily limits may undercount this order. Do NOT retry — the order already exists."
-      };
-    }
+    warnings.push(
+      `Order was placed successfully (${reference}), but recording guard state failed: ${message}. ` +
+        "Daily limits may undercount this order. Do NOT retry — the order already exists."
+    );
   }
+
+  if (orderId === undefined) {
+    console.error(`[guard] order placed (${reference}) but its orderId could not be read from the response.`);
+    warnings.push(
+      `Order was placed successfully (${reference}), but its orderId could not be read from the response. ` +
+        "It cannot be reconciled against live state, so its daily-limit contribution stays at the placement estimate. " +
+        "Do NOT retry — the order already exists."
+    );
+  }
+
+  if (warnings.length > 0 && response !== null && typeof response === "object" && !Array.isArray(response)) {
+    return {
+      ...(response as Record<string, unknown>),
+      _guardStateWarning: warnings.join(" ")
+    };
+  }
+
   return response;
 }
 

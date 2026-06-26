@@ -146,7 +146,14 @@ export type Contribution = {
  *
  * filled is the actual executed notional (execution.filledAmount, or
  * averageFilledPrice * filledQuantity as a fallback). When terminal, the
- * contribution is exactly the filled portion — unfilled quantity is released.
+ * contribution is exactly the filled portion — unfilled quantity is released —
+ * UNLESS the fill cannot be verified (malformed/partial-outage response with a
+ * non-zero or unknown filled quantity and no amount/price to value it). Freezing
+ * such an order at 0 would silently drop it from the daily total, so we fall back
+ * to the placement estimate instead. A genuinely zero-fill terminal order
+ * (filledQuantity explicitly 0, e.g. a canceled order that never executed) keeps
+ * its correct zero contribution.
+ *
  * When still open, the open remaining ((quantity - filled) * price) is added; if
  * the remaining cannot be priced (e.g. an open MARKET order with no price), we
  * fall back to the larger of the placement estimate and the filled amount so the
@@ -159,14 +166,34 @@ export function contributionFromDetail(detail: unknown, record: OrderRecord): Co
   const currency = readCurrency(root);
 
   const execution = unwrap(readKey(root, "execution"));
-  const filledQuantity = toFiniteNumber(readKey(execution, "filledQuantity")) ?? 0;
+  const filledQuantityField = toFiniteNumber(readKey(execution, "filledQuantity"));
+  const filledQuantity = filledQuantityField ?? 0;
   const filledAmountField = toFiniteNumber(readKey(execution, "filledAmount"));
   const averageFilledPrice = toFiniteNumber(readKey(execution, "averageFilledPrice"));
-  const filled =
-    filledAmountField ?? (averageFilledPrice !== undefined ? averageFilledPrice * filledQuantity : 0);
+
+  // Value the filled portion, and track whether that value is trustworthy.
+  let filled: number;
+  let filledVerifiable: boolean;
+  if (filledAmountField !== undefined) {
+    filled = filledAmountField;
+    filledVerifiable = true;
+  } else if (averageFilledPrice !== undefined) {
+    filled = averageFilledPrice * filledQuantity;
+    filledVerifiable = true;
+  } else if (filledQuantityField === 0) {
+    // Execution explicitly reports zero fills: a zero contribution is correct.
+    filled = 0;
+    filledVerifiable = true;
+  } else {
+    // Cannot value the fill (no amount, no price) and the filled quantity is
+    // non-zero or unknown: do not trust this as zero.
+    filled = 0;
+    filledVerifiable = false;
+  }
 
   if (terminal) {
-    return { status, currency, filled, committed: filled, terminal: true };
+    const committed = filledVerifiable ? filled : Math.max(record.estimatedAmount, filled);
+    return { status, currency, filled, committed, terminal: true };
   }
 
   const quantity = toFiniteNumber(readKey(root, "quantity"));

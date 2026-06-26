@@ -469,6 +469,35 @@ describe("contributionFromDetail", () => {
     );
     assert.equal(c.committed, 777);
   });
+
+  it("keeps a genuinely zero-fill terminal order at zero", () => {
+    // CANCELED with explicit filledQuantity 0 and no amount/price: truly nothing
+    // filled, so the contribution is correctly zero (not inflated to the estimate).
+    const c = contributionFromDetail(
+      { result: { status: "CANCELED", currency: "KRW", execution: { filledQuantity: "0" } } },
+      rec(500)
+    );
+    assert.equal(c.terminal, true);
+    assert.equal(c.committed, 0);
+  });
+
+  it("does not freeze a terminal order at zero when the fill cannot be verified", () => {
+    // Malformed/partial-outage: terminal status but a non-zero filled quantity
+    // with no filledAmount and no averageFilledPrice to value it. Freezing at 0
+    // would silently drop it; fall back to the conservative placement estimate.
+    const c = contributionFromDetail(
+      { result: { status: "FILLED", currency: "KRW", quantity: "10", execution: { filledQuantity: "10" } } },
+      rec(8888)
+    );
+    assert.equal(c.terminal, true);
+    assert.equal(c.committed, 8888);
+  });
+
+  it("does not freeze a terminal order at zero when execution is missing entirely", () => {
+    const c = contributionFromDetail({ result: { status: "FILLED", currency: "KRW", quantity: "10" } }, rec(4321));
+    assert.equal(c.terminal, true);
+    assert.equal(c.committed, 4321);
+  });
 });
 
 describe("reconcileTodayRecords", () => {
