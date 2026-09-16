@@ -555,3 +555,7 @@ npm run smoke:trading:mock
 MIT License
 
 토스증권 Open API 공식 문서: https://developers.tossinvest.com/docs
+
+## 기타
+
+일부 작업에 생성형 AI의 도움을 받았음을 밝힙니다.
