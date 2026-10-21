@@ -1,7 +1,14 @@
 node_modules/
+.local-dev/
 .npm-cache/
 dist/
 .test-dist/
+coverage/
+/scripts/
+/test/
+/tsconfig.test.json
+/*.tgz
+.DS_Store
 *.log
 .env
 .env.*

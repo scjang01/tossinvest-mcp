@@ -1,6 +1,6 @@
 {
   "name": "tossinvest-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model Context Protocol (MCP) server for Toss Securities Open API",
   "type": "module",
   "main": "dist/index.js",
@@ -8,17 +8,14 @@
     "tossinvest-mcp": "dist/index.js"
   },
   "files": [
-    "dist",
+    "dist/**/*.js",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
-    "smoke:readonly": "npm run build && node scripts/smoke-readonly.mjs",
-    "smoke:trading:mock": "npm run build && node scripts/smoke-trading-mock.mjs"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [
     "mcp",
@@ -43,11 +40,14 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "decimal.js": "^10.6.0",
+    "proper-lockfile": "^4.1.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "typescript": "^5.9.0"
   }
 }

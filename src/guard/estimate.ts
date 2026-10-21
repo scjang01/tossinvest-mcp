@@ -1,6 +1,7 @@
+import { Decimal } from "decimal.js";
 import type { TossClient } from "../toss/client.js";
-import { toFiniteNumber, type Currency } from "./currency.js";
-
+export type Currency = "KRW" | "USD";
+Decimal.set({ precision: 80 });
 export type OrderForEstimate = {
   symbol: string;
   side: "BUY" | "SELL";
@@ -9,161 +10,113 @@ export type OrderForEstimate = {
   price?: string;
   orderAmount?: string;
 };
-
-export type AmountEstimate = {
-  amount: number;
-  /** Set only when the currency was read authoritatively as a side effect (market orders read the orderbook). */
-  currency?: Currency;
+export type Valuation = {
+  amount: string;
+  unitPrice?: string;
+  quantity?: string;
+  currency: Currency;
+  referencePrice?: string;
+  bufferPct?: number;
 };
-
-/**
- * Estimate the notional amount of an order before it reaches the Toss order API.
- *
- * Rules:
- *  - LIMIT:                 quantity * price
- *  - amount-based MARKET:   orderAmount
- *  - quantity MARKET buy:   quantity * bestAsk * (1 + bufferPct/100)
- *  - quantity MARKET sell:  quantity * bestBid
- *
- * Anything we cannot price confidently (missing price, empty orderbook) throws
- * so the caller blocks the order. We never fall back to last/current price.
- *
- * Currency is never inferred here. For market orders we read it from the
- * orderbook response (authoritative) and return it; for LIMIT/orderAmount the
- * caller resolves currency separately from a Toss endpoint.
- */
+export function unwrap(value: unknown): any {
+  return value && typeof value === "object" && "result" in value
+    ? (value as any).result
+    : value;
+}
+export async function fetchPrice(
+  client: TossClient,
+  symbol: string,
+): Promise<{ currency: Currency; lastPrice: string }> {
+  const list = unwrap(
+    await client.request({
+      path: "/api/v1/prices",
+      query: { symbols: symbol },
+    }),
+  );
+  const entry = Array.isArray(list)
+    ? list.find((v) => v.symbol === symbol)
+    : undefined;
+  if (
+    !entry ||
+    !["KRW", "USD"].includes(entry.currency) ||
+    !positive(entry.lastPrice)
+  )
+    throw new Error(
+      `Cannot value ${symbol}: missing currency/positive lastPrice.`,
+    );
+  return entry;
+}
+export async function fetchSymbolCurrency(
+  client: TossClient,
+  symbol: string,
+): Promise<Currency> {
+  // Stock metadata remains available independently of live prices.
+  const entries = unwrap(
+    await client.request({
+      path: "/api/v1/stocks",
+      query: { symbols: symbol },
+    }),
+  );
+  const entry = Array.isArray(entries)
+    ? entries.find((v) => v.symbol === symbol)
+    : undefined;
+  if (!entry || !["KRW", "USD"].includes(entry.currency))
+    throw new Error(`Cannot determine currency for ${symbol}.`);
+  return entry.currency;
+}
+export function positive(value: unknown): boolean {
+  try {
+    return (
+      (typeof value === "string" || typeof value === "number") &&
+      new Decimal(value).isFinite() &&
+      new Decimal(value).gt(0)
+    );
+  } catch {
+    return false;
+  }
+}
 export async function estimateOrderAmount(
   client: TossClient,
   order: OrderForEstimate,
-  options: { marketOrderBufferPct: number }
-): Promise<AmountEstimate> {
+  options: {
+    marketOrderBufferPct: number;
+    currency?: Currency;
+    quote?: { currency: Currency; lastPrice: string };
+  },
+): Promise<Valuation> {
+  if (order.orderAmount !== undefined)
+    return {
+      amount: new Decimal(order.orderAmount).toFixed(),
+      currency:
+        options.currency ?? (await fetchSymbolCurrency(client, order.symbol)),
+    };
+  if (!positive(order.quantity))
+    throw new Error("Cannot estimate without positive quantity.");
   if (order.orderType === "LIMIT") {
-    const quantity = toFiniteNumber(order.quantity);
-    const price = toFiniteNumber(order.price);
-    if (quantity === undefined || price === undefined) {
-      throw new Error("Order blocked: cannot estimate LIMIT order amount without numeric quantity and price.");
-    }
-    return { amount: quantity * price };
+    if (!positive(order.price))
+      throw new Error("Cannot estimate LIMIT without positive price.");
+    return {
+      amount: new Decimal(order.quantity!).mul(order.price!).toFixed(),
+      unitPrice: order.price,
+      quantity: order.quantity,
+      currency:
+        options.currency ?? (await fetchSymbolCurrency(client, order.symbol)),
+    };
   }
-
-  // MARKET order.
-  if (order.orderAmount !== undefined) {
-    const orderAmount = toFiniteNumber(order.orderAmount);
-    if (orderAmount === undefined) {
-      throw new Error("Order blocked: cannot estimate MARKET order amount from a non-numeric orderAmount.");
-    }
-    return { amount: orderAmount };
-  }
-
-  const quantity = toFiniteNumber(order.quantity);
-  if (quantity === undefined) {
-    throw new Error("Order blocked: cannot estimate quantity-based MARKET order without a numeric quantity.");
-  }
-
-  const orderbook = await client.request({ path: "/api/v1/orderbook", query: { symbol: order.symbol } });
-  const currency = orderbookCurrency(orderbook);
-  if (currency === undefined) {
-    throw new Error(`Order blocked: orderbook for ${order.symbol} did not report a recognized currency.`);
-  }
-
-  if (order.side === "BUY") {
-    const bestAsk = bestPrice(orderbook, "asks");
-    if (bestAsk === undefined) {
-      throw new Error(
-        `Order blocked: best ask unavailable for ${order.symbol}; cannot safely estimate a market buy. Refusing to guess from last price.`
-      );
-    }
-    const buffer = 1 + options.marketOrderBufferPct / 100;
-    return { amount: quantity * bestAsk * buffer, currency };
-  }
-
-  const bestBid = bestPrice(orderbook, "bids");
-  if (bestBid === undefined) {
-    throw new Error(
-      `Order blocked: best bid unavailable for ${order.symbol}; cannot safely estimate a market sell. Refusing to guess from last price.`
-    );
-  }
-  return { amount: quantity * bestBid, currency };
-}
-
-/**
- * Authoritative currency for a symbol, read from GET /api/v1/prices. The Toss
- * PriceResponse requires a `currency` field. Throws (blocks) when it cannot be
- * read — we never infer currency for a financial decision.
- */
-export async function fetchSymbolCurrency(client: TossClient, symbol: string): Promise<Currency> {
-  const response = await client.request({ path: "/api/v1/prices", query: { symbols: symbol } });
-  const root = unwrap(response);
-  const entry = Array.isArray(root) ? root[0] : undefined;
-  const currency = getKey(entry, "currency");
-  if (currency !== "KRW" && currency !== "USD") {
-    throw new Error(`Order blocked: could not read a recognized currency for ${symbol} from the prices API.`);
-  }
-  return currency;
-}
-
-/**
- * Top-of-book price from a Toss orderbook response.
- *
- * Per the Toss Open API schema the response is `{ result: { currency, asks:
- * [{ price, volume }], bids: [{ price, volume }] } }`. The schema description
- * and the spec's own examples disagree on array ordering, so we compute the best
- * ask as the lowest ask price and the best bid as the highest bid price rather
- * than trusting index 0. Returns undefined when no usable price exists.
- */
-export function bestPrice(response: unknown, side: "asks" | "bids"): number | undefined {
-  const root = unwrap(response);
-  if (root === undefined) {
-    return undefined;
-  }
-
-  const levels = (root as Record<string, unknown>)[side];
-  if (!Array.isArray(levels) || levels.length === 0) {
-    return undefined;
-  }
-
-  const prices: number[] = [];
-  for (const level of levels) {
-    const price = toFiniteNumber(getKey(level, "price"));
-    if (price !== undefined) {
-      prices.push(price);
-    }
-  }
-
-  if (prices.length === 0) {
-    return undefined;
-  }
-
-  return side === "asks" ? Math.min(...prices) : Math.max(...prices);
-}
-
-/** Currency reported by the orderbook response, if it is a recognized value. */
-export function orderbookCurrency(response: unknown): Currency | undefined {
-  const currency = getKey(unwrap(response), "currency");
-  return currency === "KRW" || currency === "USD" ? currency : undefined;
-}
-
-function unwrap(response: unknown): Record<string, unknown> | unknown[] | undefined {
-  if (response === null || typeof response !== "object") {
-    return undefined;
-  }
-  if (Array.isArray(response)) {
-    return response;
-  }
-  const obj = response as Record<string, unknown>;
-  const inner = obj.result;
-  if (Array.isArray(inner)) {
-    return inner;
-  }
-  if (inner !== null && typeof inner === "object") {
-    return inner as Record<string, unknown>;
-  }
-  return obj;
-}
-
-function getKey(value: unknown, key: string): unknown {
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return (value as Record<string, unknown>)[key];
-  }
-  return undefined;
+  const price = options.quote ?? (await fetchPrice(client, order.symbol));
+  const unit = new Decimal(price.lastPrice).mul(
+    new Decimal(1).plus(
+      new Decimal(options.marketOrderBufferPct)
+        .div(100)
+        .mul(order.side === "BUY" ? 1 : -1),
+    ),
+  );
+  return {
+    amount: unit.mul(order.quantity!).toFixed(),
+    unitPrice: unit.toFixed(),
+    quantity: order.quantity,
+    currency: price.currency,
+    referencePrice: price.lastPrice,
+    bufferPct: options.marketOrderBufferPct,
+  };
 }

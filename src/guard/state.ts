@@ -1,250 +1,317 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-
+import { readFileSync, copyFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+import { Decimal } from "decimal.js";
 import type { Config } from "../config.js";
-import { toFiniteNumber, type Currency } from "./currency.js";
+import { atomicWrite, credentialId, runtimeDir } from "../utils/storage.js";
 
-export type OrderRecord = {
-  date: string; // KST calendar date the order was placed, YYYY-MM-DD (the daily bucket)
-  account: number;
-  symbol: string;
-  side: "BUY" | "SELL";
-  orderType: "LIMIT" | "MARKET";
-  currency: Currency;
-  estimatedAmount: number; // committed notional estimated at placement; used as a fallback
-  orderId?: string;
-  clientOrderId?: string;
-  timestamp: string; // ISO 8601
-
-  // Reconciliation cache, refreshed by reconcileToday() from the live order.
-  status?: string; // last-seen OrderStatus
-  filledAmount?: number; // actual filled notional (native currency)
-  committedAmount?: number; // last-computed contribution = filled + open remaining
-  terminal?: boolean; // true once the order reached a terminal status (freeze, stop polling)
+const nonnegative = z.string().regex(/^\d+(\.\d+)?$/);
+const legSchema = z.object({
+  amount: nonnegative,
+  unitPrice: nonnegative.optional(),
+  quantity: nonnegative.optional(),
+  currency: z.enum(["KRW", "USD"]),
+  referencePrice: nonnegative.optional(),
+  bufferPct: z.number().min(0).lt(100).optional(),
+});
+const bookedSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["order", "conditional"]),
+  date: z.iso.date(),
+  account: z.number().int().positive(),
+  currency: z.enum(["KRW", "USD"]),
+  amount: nonnegative,
+  legs: z.array(legSchema).min(1).max(2),
+  symbol: z.string(),
+  side: z.enum(["BUY", "SELL"]).optional(),
+  orderType: z.enum(["LIMIT", "MARKET"]),
+  group: z.enum(["SINGLE", "OCO", "OTO"]).optional(),
+  closed: z.boolean().optional(),
+});
+const operationSchema = z.object({
+  id: z.string(),
+  date: z.iso.date(),
+  account: z.number().int().positive(),
+  kind: z.enum(["order", "conditional"]),
+  action: z.enum(["create", "modify", "cancel"]),
+  fingerprint: z.string(),
+  body: z.record(z.string(), z.unknown()),
+  clientOrderId: z.string().optional(),
+  started: z.number(),
+  currency: z.enum(["KRW", "USD"]).optional(),
+  reserved: nonnegative,
+  delta: z.string().regex(/^-?\d+(\.\d+)?$/),
+  targetId: z.string().optional(),
+  targetBefore: z.unknown().optional(),
+  replacement: bookedSchema.optional(),
+  response: z.unknown().optional(),
+  status: z.enum(["pending", "complete"]),
+  counted: z.boolean(),
+  dispatching: z.boolean().optional(),
+});
+const bucketSchema = z.object({
+  amount: nonnegative,
+  count: z.number().int().nonnegative(),
+});
+const stateSchema = z.object({
+  version: z.literal(4),
+  namespace: z.string(),
+  buckets: z.record(
+    z.string().regex(/^\d{4}-\d{2}-\d{2}:[1-9]\d*:(KRW|USD)$/),
+    bucketSchema,
+  ),
+  orders: z.record(z.string(), bookedSchema),
+  operations: z.record(z.string(), operationSchema),
+  warnings: z.array(z.string()),
+  legacyCounts: z.array(
+    z.object({
+      account: z.number().int().positive(),
+      count: z.number().int().nonnegative(),
+      until: z.number().finite(),
+    }),
+  ),
+});
+const v3Schema = stateSchema.omit({ legacyCounts: true }).extend({
+  version: z.literal(3),
+  buckets: z.record(
+    z.string().regex(/^\d{4}-\d{2}-\d{2}:[1-9]\d*:(KRW|USD|COUNT)$/),
+    bucketSchema,
+  ),
+});
+export type Currency = "KRW" | "USD";
+export type BookedOrder = z.infer<typeof bookedSchema>;
+export type Operation = z.infer<typeof operationSchema>;
+export type GuardState = z.infer<typeof stateSchema>;
+const kstDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+export function kstDate(ms = Date.now()): string {
+  return kstDateFormatter.format(new Date(ms));
+}
+const resetMinutes: Record<Currency, number> = {
+  KRW: 20 * 60 + 1,
+  USD: 10 * 60 + 1,
 };
-
-const STATE_DIR_NAME = "tossinvest-mcp";
-const STATE_FILE_NAME = "guard-state.json";
-
-// Terminal order statuses: the order can no longer change, so its contribution
-// is frozen at the filled portion (any unfilled quantity is released). All other
-// statuses — including unknown ones the spec says to tolerate — are treated as
-// still open and re-polled. See OrderStatus in the Toss OpenAPI spec.
-const TERMINAL_STATUSES = new Set(["FILLED", "CANCELED", "REJECTED", "REPLACED"]);
-
-/** Resolve the guard state file path, honoring an explicit override or the OS data directory. */
-export function resolveStatePath(config: Config): string {
-  if (config.guardStatePath) {
-    return config.guardStatePath;
-  }
-  return join(defaultDataDir(), STATE_DIR_NAME, STATE_FILE_NAME);
+/** Label a budget window with the KST date on which that window started. */
+export function budgetDate(currency: Currency, ms = Date.now()): string {
+  return kstDate(ms - resetMinutes[currency] * 60_000);
 }
-
-function defaultDataDir(): string {
-  const home = homedir();
-
-  if (process.platform === "win32") {
-    return process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
-  }
-  if (process.platform === "darwin") {
-    return join(home, "Library", "Application Support");
-  }
-  return process.env.XDG_DATA_HOME ?? join(home, ".local", "share");
+export function nextReset(currency: Currency, ms = Date.now()): number {
+  const time = currency === "KRW" ? "20:01" : "10:01";
+  return (
+    Date.parse(`${budgetDate(currency, ms)}T${time}:00+09:00`) + 86_400_000
+  );
 }
-
-/**
- * Read guard state records. A missing file is treated as an empty history. Any
- * other failure (unreadable file, malformed JSON, wrong shape) throws so the
- * caller blocks the order instead of silently ignoring daily limits.
- */
-export function readState(path: string): OrderRecord[] {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+function statePath(c: Config, version: number): string {
+  return c.guardStatePath
+    ? `${c.guardStatePath}.v${version}-${credentialId(c)}.json`
+    : join(runtimeDir(c), `guard-v${version}-${credentialId(c)}.json`);
+}
+export function resolveStatePath(c: Config): string {
+  return statePath(c, 4);
+}
+export function hasLegacyState(c: Config): boolean {
+  return (
+    existsSync(statePath(c, 3)) ||
+    existsSync(c.guardStatePath ?? join(runtimeDir(c), "guard-state.json"))
+  );
+}
+export function bucketKey(
+  account: number,
+  currency: Currency,
+  date = budgetDate(currency),
+): string {
+  return `${date}:${account}:${currency}`;
+}
+export function orderKey(kind: string, account: number, id: string): string {
+  return `${kind}:${account}:${id}`;
+}
+export function writeState(path: string, state: GuardState): void {
+  atomicWrite(path, stateSchema.parse(state));
+}
+export function dailyCount(
+  state: GuardState,
+  account: number,
+  currency: Currency,
+  ms = Date.now(),
+): number {
+  return (
+    (state.buckets[bucketKey(account, currency, budgetDate(currency, ms))]
+      ?.count ?? 0) +
+    // Legacy v3 combined counts cannot be assigned to a market reliably.
+    // Retain them against each cap until their existing conservative expiry.
+    state.legacyCounts
+      .filter((v) => v.account === account && ms < v.until)
+      .reduce((n, v) => n + v.count, 0)
+  );
+}
+function migrateV3(config: Config, state: GuardState, now: number): boolean {
+  const path = statePath(config, 3);
+  if (!existsSync(path)) return false;
+  const previous = v3Schema.parse(JSON.parse(readFileSync(path, "utf8")));
+  if (previous.namespace !== state.namespace)
+    throw new Error("Guard namespace mismatch.");
+  copyFileSync(path, `${path}.pre-market-reset-${now}.bak`);
+  const recent = new Set([kstDate(now), kstDate(now - 86_400_000)]);
+  for (const [key, value] of Object.entries(previous.buckets)) {
+    const [date, account, unit] = key.split(":");
+    if (!recent.has(date)) continue;
+    if (unit === "COUNT") {
+      if (value.count)
+        state.legacyCounts.push({
+          account: Number(account),
+          count: value.count,
+          until: Math.max(nextReset("KRW", now), nextReset("USD", now)),
+        });
+    } else {
+      applyDelta(
+        state,
+        Number(account),
+        unit as Currency,
+        value.amount,
+        budgetDate(unit as Currency, now),
+      );
     }
-    throw new Error(`Order blocked: cannot read guard state file at ${path}: ${asMessage(error)}`);
   }
-
-  if (raw.trim() === "") {
-    return [];
+  state.operations = previous.operations;
+  state.orders = previous.orders;
+  for (const op of Object.values(state.operations)) {
+    if (op.currency) op.date = budgetDate(op.currency, op.started);
+    if (op.replacement)
+      op.replacement.date = budgetDate(op.replacement.currency, op.started);
   }
-
-  let parsed: unknown;
+  for (const order of Object.values(state.orders)) {
+    const origin = Object.values(state.operations).find(
+      (op) =>
+        op.kind === order.kind &&
+        op.account === order.account &&
+        op.replacement?.id === order.id,
+    );
+    if (origin) order.date = budgetDate(order.currency, origin.started);
+    else order.closed = true; // Unknown reservation time cannot prove a refundable window.
+  }
+  state.warnings.push(
+    ...previous.warnings,
+    "Migrated v3 midnight budgets conservatively into market reset windows; current/previous calendar-day balances were retained. Unattributed combined counts apply conservatively to each market cap until both markets next reset. Refunds require a known reservation window. Original v3 file was backed up.",
+  );
+  return true;
+}
+export function readState(path: string, config: Config): GuardState {
   try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Order blocked: guard state file at ${path} is not valid JSON: ${asMessage(error)}`);
+    const state = stateSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    if (state.namespace !== credentialId(config))
+      throw new Error("Guard namespace mismatch.");
+    return state;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT")
+      throw new Error(
+        `Cannot read guard state (not reset): ${e instanceof Error ? e.message : String(e)}`,
+      );
   }
-
-  if (!Array.isArray(parsed)) {
-    throw new Error(`Order blocked: guard state file at ${path} must contain a JSON array of order records.`);
+  const state: GuardState = {
+    version: 4,
+    namespace: credentialId(config),
+    buckets: {},
+    orders: {},
+    operations: {},
+    warnings: [],
+    legacyCounts: [],
+  };
+  const now = Date.now();
+  if (migrateV3(config, state, now)) {
+    writeState(path, state);
+    return state;
   }
-
-  return parsed as OrderRecord[];
-}
-
-/**
- * Append a record after a successful order. Daily limits only ever consult
- * today's (KST) records, so older records are dropped here to keep the ledger
- * bounded — they carry no information any check uses.
- */
-export function recordOrder(path: string, record: OrderRecord): void {
-  const today = kstDate();
-  const existing = readState(path).filter((existingRecord) => existingRecord.date === today);
-  existing.push(record);
-  writeState(path, existing);
-}
-
-/**
- * Today's (KST) records without any live reconciliation. The daily count limit
- * depends only on how many orders were placed today, which reconciliation never
- * changes, so a count-only check reads the ledger directly and avoids both the
- * per-order GETs and the fail-safe block a failed fetch would otherwise cause.
- */
-export function readTodayRecords(path: string): OrderRecord[] {
-  const today = kstDate();
-  return readState(path).filter((record) => record.date === today);
-}
-
-let tmpCounter = 0;
-
-/**
- * Persist records atomically: write a temp file then rename, so a concurrent
- * reader never sees a half-written file (rename is atomic on the same filesystem).
- */
-export function writeState(path: string, records: OrderRecord[]): void {
-  mkdirSync(dirname(path), { recursive: true });
-  tmpCounter += 1;
-  const tmp = `${path}.${process.pid}.${tmpCounter}.tmp`;
-  writeFileSync(tmp, JSON.stringify(records, null, 2), "utf8");
-  renameSync(tmp, path);
-}
-
-/** A record's current contribution: its reconciled amount, or the placement estimate. */
-export function contributionOf(record: OrderRecord): number {
-  return record.committedAmount ?? record.estimatedAmount;
-}
-
-export function isTerminalStatus(status: unknown): boolean {
-  return typeof status === "string" && TERMINAL_STATUSES.has(status);
-}
-
-export type Contribution = {
-  status?: string;
-  currency?: Currency;
-  filled: number; // actual filled notional
-  committed: number; // filled + open remaining (filled only when terminal)
-  terminal: boolean;
-};
-
-/**
- * Compute an order's contribution from its live detail (GET /orders/{id}).
- *
- * filled is the actual executed notional (execution.filledAmount, or
- * averageFilledPrice * filledQuantity as a fallback). When terminal, the
- * contribution is exactly the filled portion — unfilled quantity is released —
- * UNLESS the fill cannot be verified (malformed/partial-outage response with a
- * non-zero or unknown filled quantity and no amount/price to value it). Freezing
- * such an order at 0 would silently drop it from the daily total, so we fall back
- * to the placement estimate instead. A genuinely zero-fill terminal order
- * (filledQuantity explicitly 0, e.g. a canceled order that never executed) keeps
- * its correct zero contribution.
- *
- * When still open, the open remaining ((quantity - filled) * price) is added; if
- * the remaining cannot be priced (e.g. an open MARKET order with no price), we
- * fall back to the larger of the placement estimate and the filled amount so the
- * limit is never under-counted.
- */
-export function contributionFromDetail(detail: unknown, record: OrderRecord): Contribution {
-  const root = unwrap(detail);
-  const status = readString(root, "status");
-  const terminal = isTerminalStatus(status);
-  const currency = readCurrency(root);
-
-  const execution = unwrap(readKey(root, "execution"));
-  const filledQuantityField = toFiniteNumber(readKey(execution, "filledQuantity"));
-  const filledQuantity = filledQuantityField ?? 0;
-  const filledAmountField = toFiniteNumber(readKey(execution, "filledAmount"));
-  const averageFilledPrice = toFiniteNumber(readKey(execution, "averageFilledPrice"));
-
-  // Value the filled portion, and track whether that value is trustworthy.
-  let filled: number;
-  let filledVerifiable: boolean;
-  if (filledAmountField !== undefined) {
-    filled = filledAmountField;
-    filledVerifiable = true;
-  } else if (averageFilledPrice !== undefined) {
-    filled = averageFilledPrice * filledQuantity;
-    filledVerifiable = true;
-  } else if (filledQuantityField === 0) {
-    // Execution explicitly reports zero fills: a zero contribution is correct.
-    filled = 0;
-    filledVerifiable = true;
-  } else {
-    // Cannot value the fill (no amount, no price) and the filled quantity is
-    // non-zero or unknown: do not trust this as zero.
-    filled = 0;
-    filledVerifiable = false;
+  const legacy =
+    config.guardStatePath ?? join(runtimeDir(config), "guard-state.json");
+  if (existsSync(legacy)) {
+    const rows = JSON.parse(readFileSync(legacy, "utf8"));
+    if (!Array.isArray(rows))
+      throw new Error("Legacy guard state must be an array; not resetting.");
+    copyFileSync(legacy, `${legacy}.pre-0.3.0-${Date.now()}.bak`);
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (![kstDate(now), kstDate(now - 86_400_000)].includes(row.date))
+        continue;
+      const amount = row.committedAmount ?? row.estimatedAmount;
+      if (
+        !Number.isInteger(row.account) ||
+        row.account < 1 ||
+        !["KRW", "USD"].includes(row.currency) ||
+        !new Decimal(amount ?? NaN).isFinite() ||
+        new Decimal(amount).lt(0)
+      )
+        throw new Error("Invalid legacy record; not resetting daily limits.");
+      const id = row.orderId ?? `legacy-${seen.size}`;
+      const key = orderKey("order", row.account, id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const bucket = (state.buckets[bucketKey(row.account, row.currency)] ??= {
+        amount: "0",
+        count: 0,
+      });
+      bucket.amount = new Decimal(bucket.amount).plus(amount).toFixed();
+      bucket.count++;
+      state.buckets[bucketKey(row.account, row.currency)] = bucket;
+      // Legacy data lacks reliable open-quantity valuation. Keep the balance, but do not guess refunds.
+    }
+    state.warnings.push(
+      "Migrated current/previous calendar-day legacy balances/counts conservatively into market reset windows; legacy state has no API-key identity. Legacy refunds cannot be reconstructed reliably. Original file was backed up.",
+    );
   }
-
-  if (terminal) {
-    const committed = filledVerifiable ? filled : Math.max(record.estimatedAmount, filled);
-    return { status, currency, filled, committed, terminal: true };
+  writeState(path, state);
+  return state;
+}
+export function applyDelta(
+  state: GuardState,
+  account: number,
+  currency: Currency,
+  delta: string,
+  date = budgetDate(currency),
+) {
+  const key = bucketKey(account, currency, date);
+  const bucket = (state.buckets[key] ??= { amount: "0", count: 0 });
+  bucket.amount = Decimal.max(
+    0,
+    new Decimal(bucket.amount).plus(delta),
+  ).toFixed();
+  state.buckets[key] = bucket;
+}
+export function pruneState(state: GuardState): void {
+  const now = Date.now();
+  const pending = Object.values(state.operations).filter(
+    (op) => op.status === "pending",
+  );
+  const heldBuckets = new Set(
+    pending
+      .filter((op) => op.currency)
+      .map((op) => bucketKey(op.account, op.currency!, op.date)),
+  );
+  const heldOrders = new Set(
+    pending.flatMap((op) =>
+      [op.targetId, op.replacement?.id]
+        .filter(Boolean)
+        .map((id) => orderKey(op.kind, op.account, id!)),
+    ),
+  );
+  for (const [key, value] of Object.entries(state.operations))
+    if (
+      value.status === "complete" &&
+      value.date !==
+        (value.currency ? budgetDate(value.currency, now) : kstDate(now)) &&
+      now - value.started >= 10 * 60 * 1000
+    )
+      delete state.operations[key];
+  for (const [key, value] of Object.entries(state.orders))
+    if (value.date !== budgetDate(value.currency, now) && !heldOrders.has(key))
+      delete state.orders[key];
+  for (const key of Object.keys(state.buckets)) {
+    const [date, , currency] = key.split(":");
+    if (date !== budgetDate(currency as Currency, now) && !heldBuckets.has(key))
+      delete state.buckets[key];
   }
-
-  const quantity = toFiniteNumber(readKey(root, "quantity"));
-  const price = toFiniteNumber(readKey(root, "price"));
-  let committed: number;
-  if (quantity !== undefined && price !== undefined) {
-    const remaining = Math.max(0, quantity - filledQuantity) * price;
-    committed = filled + remaining;
-  } else {
-    committed = Math.max(record.estimatedAmount, filled);
-  }
-
-  return { status, currency, filled, committed, terminal: false };
-}
-
-/** Current calendar date in the Asia/Seoul timezone, formatted YYYY-MM-DD. */
-export function kstDate(timestampMs: number = Date.now()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(new Date(timestampMs));
-}
-
-function unwrap(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const obj = value as Record<string, unknown>;
-  const inner = obj.result;
-  if (inner !== null && typeof inner === "object" && !Array.isArray(inner)) {
-    return inner as Record<string, unknown>;
-  }
-  return obj;
-}
-
-function readKey(obj: Record<string, unknown> | undefined, key: string): unknown {
-  return obj === undefined ? undefined : obj[key];
-}
-
-function readString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = readKey(obj, key);
-  return typeof value === "string" ? value : undefined;
-}
-
-function readCurrency(obj: Record<string, unknown> | undefined): Currency | undefined {
-  const value = readKey(obj, "currency");
-  return value === "KRW" || value === "USD" ? value : undefined;
-}
-
-function asMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  state.legacyCounts = state.legacyCounts.filter((v) => now < v.until);
 }

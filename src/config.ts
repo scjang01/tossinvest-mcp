@@ -1,112 +1,146 @@
 import { z } from "zod";
 
-const DEFAULT_BASE_URL = "https://openapi.tossinvest.com";
-const DEFAULT_ACCOUNT_SEQ = 1;
-const DEFAULT_MARKET_ORDER_BUFFER_PCT = 5;
-
-const boolEnum = z.enum(["true", "false"]);
-
-const optionalBool = boolEnum.optional();
-const optionalPositiveAmount = z.coerce.number().positive().optional();
-const optionalPositiveInt = z.coerce.number().int().positive().optional();
-
+const optionalBool = z.enum(["true", "false"]).optional();
+const countLimit = z.coerce.number().int().positive().optional();
+const amount = z
+  .string()
+  .regex(/^\d+(\.\d+)?$/)
+  .refine((v) => /[1-9]/.test(v), "Must be positive")
+  .optional();
 const envSchema = z.object({
-  TOSSINVEST_API_KEY: z.string().min(1),
-  TOSSINVEST_SECRET_KEY: z.string().min(1),
-  TOSSINVEST_ACCOUNT: z.coerce.number().int().positive().default(DEFAULT_ACCOUNT_SEQ),
-  TOSSINVEST_BASE_URL: z.string().url().default(DEFAULT_BASE_URL),
+  TOSSINVEST_CLIENT_ID: z.string().trim().min(1),
+  TOSSINVEST_CLIENT_SECRET: z.string().trim().min(1),
+  TOSSINVEST_ACCOUNT: z.coerce.number().int().positive().optional(),
+  TOSSINVEST_BASE_URL: z
+    .string()
+    .url()
+    .default("https://openapi.tossinvest.com"),
   TOSSINVEST_ENABLE_TRADING: optionalBool,
-
-  // Guardrails.
-  TOSSINVEST_REQUIRE_ORDER_CONFIRMATION: optionalBool,
-  TOSSINVEST_MAX_ORDER_AMOUNT_KRW: optionalPositiveAmount,
-  TOSSINVEST_MAX_ORDER_AMOUNT_USD: optionalPositiveAmount,
-  TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW: optionalPositiveAmount,
-  TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD: optionalPositiveAmount,
-  TOSSINVEST_DAILY_MAX_ORDER_COUNT: optionalPositiveInt,
+  TOSSINVEST_MAX_ORDER_AMOUNT_KRW: amount,
+  TOSSINVEST_MAX_ORDER_AMOUNT_USD: amount,
+  TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW: amount,
+  TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD: amount,
+  TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW: countLimit,
+  TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD: countLimit,
+  TOSSINVEST_DAILY_MAX_ORDER_COUNT: countLimit,
   TOSSINVEST_ALLOWED_SYMBOLS: z.string().optional(),
-  TOSSINVEST_ALLOW_SELL_ORDERS: optionalBool,
-  TOSSINVEST_ALLOW_MARKET_ORDERS: optionalBool,
-  TOSSINVEST_MARKET_ORDER_BUFFER_PCT: z.coerce.number().min(0).optional(),
-  TOSSINVEST_LOCK_ACCOUNT: optionalBool,
-  TOSSINVEST_GUARD_STATE_PATH: z.string().min(1).optional()
+  TOSSINVEST_MARKET_ORDER_BUFFER_PCT: z.coerce
+    .number()
+    .min(0)
+    .lt(100)
+    .default(3),
+  TOSSINVEST_DATA_DIR: z.string().min(1).optional(),
+  TOSSINVEST_GUARD_STATE_PATH: z.string().min(1).optional(),
 });
-
 export type Config = {
   clientId: string;
   clientSecret: string;
-  defaultAccountSeq: number;
+  defaultAccountSeq?: number;
   baseUrl: string;
   tradingEnabled: boolean;
-
-  requireOrderConfirmation: boolean;
-  maxOrderAmountKrw?: number;
-  maxOrderAmountUsd?: number;
-  dailyMaxOrderAmountKrw?: number;
-  dailyMaxOrderAmountUsd?: number;
-  dailyMaxOrderCount?: number;
+  maxOrderAmountKrw?: string | number;
+  maxOrderAmountUsd?: string | number;
+  dailyMaxOrderAmountKrw?: string | number;
+  dailyMaxOrderAmountUsd?: string | number;
+  dailyMaxOrderCountKrw?: number;
+  dailyMaxOrderCountUsd?: number;
   allowedSymbols?: string[];
-  allowSellOrders: boolean;
-  allowMarketOrders: boolean;
   marketOrderBufferPct: number;
-  lockAccount: boolean;
   guardStatePath?: string;
+  warnings?: string[];
+  /** Shared data directory (TOSSINVEST_DATA_DIR). */
+  runtimeDir?: string;
 };
-
+const removed = {
+  TOSSINVEST_REQUIRE_ORDER_CONFIRMATION:
+    "confirmOrderAction has been removed; trading tools no longer require this flag.",
+  TOSSINVEST_ALLOW_SELL_ORDERS:
+    "Sell orders are allowed when trading is enabled.",
+  TOSSINVEST_ALLOW_MARKET_ORDERS:
+    "Market orders are allowed when trading is enabled.",
+  TOSSINVEST_LOCK_ACCOUNT:
+    "TOSSINVEST_ACCOUNT now fixes the account; otherwise each account tool requires accountSeq.",
+};
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  // Treat empty-string env values (common in .env templates) as unset so that
-  // optional guardrails fall back to defaults instead of failing validation.
-  const cleaned: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined && value !== "") {
-      cleaned[key] = value;
+  const cleaned = Object.fromEntries(
+    Object.entries(env).filter(([, v]) => v !== undefined && v.trim() !== ""),
+  );
+  // Resolve aliases before validation without modifying the caller's environment.
+  // Blank canonical values count as unset, just like blank optional settings.
+  const parsed = envSchema.safeParse({
+    ...cleaned,
+    TOSSINVEST_CLIENT_ID:
+      cleaned.TOSSINVEST_CLIENT_ID ?? cleaned.TOSSINVEST_API_KEY,
+    TOSSINVEST_CLIENT_SECRET:
+      cleaned.TOSSINVEST_CLIENT_SECRET ?? cleaned.TOSSINVEST_SECRET_KEY,
+  });
+  if (!parsed.success)
+    throw new Error(
+      `Invalid Toss Invest MCP configuration: ${parsed.error.issues.map((i) => i.path.join(".")).join(", ")}`,
+    );
+  const d = parsed.data;
+  const symbols = d.TOSSINVEST_ALLOWED_SYMBOLS?.split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  if (d.TOSSINVEST_ALLOWED_SYMBOLS && !symbols?.length)
+    throw new Error(
+      "TOSSINVEST_ALLOWED_SYMBOLS must contain at least one symbol.",
+    );
+  const warnings = Object.entries(removed)
+    .filter(([k]) => cleaned[k] !== undefined)
+    .map(([k, v]) => `${k} is removed in 0.3.0. ${v}`);
+  if (d.TOSSINVEST_DAILY_MAX_ORDER_COUNT !== undefined)
+    warnings.push(
+      "TOSSINVEST_DAILY_MAX_ORDER_COUNT is deprecated; it now supplies the default count limit independently for each market, not a combined cap. Use TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW and TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD; each explicit market setting takes precedence.",
+    );
+  for (const [legacy, canonical] of [
+    ["TOSSINVEST_API_KEY", "TOSSINVEST_CLIENT_ID"],
+    ["TOSSINVEST_SECRET_KEY", "TOSSINVEST_CLIENT_SECRET"],
+  ] as const) {
+    if (cleaned[legacy] !== undefined) {
+      warnings.push(
+        `${legacy} is a supported legacy alias; use ${canonical}.` +
+          (cleaned[canonical] !== undefined
+            ? ` Both are set; ${canonical} takes precedence.`
+            : ""),
+      );
     }
   }
-
-  const parsed = envSchema.safeParse(cleaned);
-
-  if (!parsed.success) {
-    const missing = parsed.error.issues.map((issue) => issue.path.join(".")).join(", ");
-    throw new Error(`Invalid Toss Invest MCP configuration: ${missing}`);
-  }
-
-  const data = parsed.data;
-
   return {
-    clientId: data.TOSSINVEST_API_KEY,
-    clientSecret: data.TOSSINVEST_SECRET_KEY,
-    defaultAccountSeq: data.TOSSINVEST_ACCOUNT,
-    baseUrl: data.TOSSINVEST_BASE_URL.replace(/\/+$/, ""),
-    tradingEnabled: data.TOSSINVEST_ENABLE_TRADING === "true",
-
-    requireOrderConfirmation: data.TOSSINVEST_REQUIRE_ORDER_CONFIRMATION !== "false",
-    maxOrderAmountKrw: data.TOSSINVEST_MAX_ORDER_AMOUNT_KRW,
-    maxOrderAmountUsd: data.TOSSINVEST_MAX_ORDER_AMOUNT_USD,
-    dailyMaxOrderAmountKrw: data.TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW,
-    dailyMaxOrderAmountUsd: data.TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD,
-    dailyMaxOrderCount: data.TOSSINVEST_DAILY_MAX_ORDER_COUNT,
-    allowedSymbols: parseAllowedSymbols(data.TOSSINVEST_ALLOWED_SYMBOLS),
-    allowSellOrders: data.TOSSINVEST_ALLOW_SELL_ORDERS === "true",
-    allowMarketOrders: data.TOSSINVEST_ALLOW_MARKET_ORDERS === "true",
-    marketOrderBufferPct: data.TOSSINVEST_MARKET_ORDER_BUFFER_PCT ?? DEFAULT_MARKET_ORDER_BUFFER_PCT,
-    lockAccount: data.TOSSINVEST_LOCK_ACCOUNT !== "false",
-    guardStatePath: data.TOSSINVEST_GUARD_STATE_PATH
+    clientId: d.TOSSINVEST_CLIENT_ID,
+    clientSecret: d.TOSSINVEST_CLIENT_SECRET,
+    defaultAccountSeq: d.TOSSINVEST_ACCOUNT,
+    baseUrl: d.TOSSINVEST_BASE_URL.replace(/\/+$/, ""),
+    tradingEnabled: d.TOSSINVEST_ENABLE_TRADING === "true",
+    maxOrderAmountKrw: d.TOSSINVEST_MAX_ORDER_AMOUNT_KRW,
+    maxOrderAmountUsd: d.TOSSINVEST_MAX_ORDER_AMOUNT_USD,
+    dailyMaxOrderAmountKrw: d.TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW,
+    dailyMaxOrderAmountUsd: d.TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD,
+    dailyMaxOrderCountKrw:
+      d.TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW ??
+      d.TOSSINVEST_DAILY_MAX_ORDER_COUNT,
+    dailyMaxOrderCountUsd:
+      d.TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD ??
+      d.TOSSINVEST_DAILY_MAX_ORDER_COUNT,
+    allowedSymbols: symbols,
+    marketOrderBufferPct: d.TOSSINVEST_MARKET_ORDER_BUFFER_PCT,
+    guardStatePath: d.TOSSINVEST_GUARD_STATE_PATH,
+    runtimeDir: d.TOSSINVEST_DATA_DIR,
+    warnings,
   };
 }
-
-export function resolveAccountSeq(inputAccountSeq: number | undefined, defaultAccountSeq: number | undefined): number {
-  return inputAccountSeq ?? defaultAccountSeq ?? DEFAULT_ACCOUNT_SEQ;
-}
-
-function parseAllowedSymbols(raw: string | undefined): string[] | undefined {
-  if (raw === undefined) {
-    return undefined;
+export function resolveAccountSeq(
+  input: number | undefined,
+  fixed: number | undefined,
+): number {
+  if (fixed !== undefined) {
+    if (input !== undefined && input !== fixed)
+      throw new Error(`Account is fixed to TOSSINVEST_ACCOUNT (${fixed}).`);
+    return fixed;
   }
-
-  const symbols = raw
-    .split(",")
-    .map((symbol) => symbol.trim().toUpperCase())
-    .filter((symbol) => symbol.length > 0);
-
-  return symbols.length > 0 ? symbols : undefined;
+  if (input === undefined)
+    throw new Error(
+      "accountSeq is required. Call toss_get_accounts first; ask the user if multiple accounts are ambiguous.",
+    );
+  return input;
 }

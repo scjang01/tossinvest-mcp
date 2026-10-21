@@ -2,7 +2,9 @@
 
 ## 프로그램 개요
 
-`tossinvest-mcp`는 토스증권 Open API(현재가 조회, 주문, 잔고 조회 등)를 OpenAI 서비스, Claude Desktop, Cursor 같은 MCP 지원 앱에서 사용할 수 있게 해주는 로컬 MCP 서버입니다.
+현재 버전: **0.3.0**
+
+`tossinvest-mcp`는 토스증권 Open API(현재가 조회, 주문, 잔고 조회 등)를 OpenAI 서비스, Claude Desktop, Cursor 같은 MCP 지원 프로그램에서 사용할 수 있게 해주는 로컬 MCP 서버입니다.
 
 쉽게 말해, 이 프로그램을 MCP 클라이언트에 등록하면 AI에게 다음처럼 요청할 수 있습니다.
 
@@ -15,10 +17,10 @@
 ```
 
 ```text
-대기 중인 주문 목록을 보여줘.
+삼성전자 1주를 주문해줘.
 ```
 
-이 프로그램은 사용자의 컴퓨터에서만 실행됩니다.
+**이 프로그램은 사용자의 컴퓨터에서만 실행됩니다.**
 
 ## 가장 중요한 주의사항
 
@@ -39,7 +41,12 @@
 - 캔들 차트 조회
 - 상한가/하한가 조회
 - 종목 기본 정보 조회
+- 전체 종목 목록 조회
 - 매수 유의사항 조회
+- 종목별 투자자·프로그램·공매도·신용거래·대차거래 동향 조회
+- 주식 랭킹 조회
+- 시장 지표 현재가·차트·투자자 매매동향 조회
+- 섹터 목록·상세·랭킹·소속 주식·ETF 조회
 - 환율 조회
 - 국내/미국 장 운영 시간 조회
 - 계좌 목록 조회
@@ -49,26 +56,29 @@
 - 매매 수수료 조회
 - 주문 목록 조회
 - 주문 상세 조회
+- 조건주문 목록·상세 조회
 
 거래 기능을 켠 경우 사용할 수 있는 도구:
 
 - `toss_create_order`: 주문 생성
 - `toss_modify_order`: 주문 정정
 - `toss_cancel_order`: 주문 취소
+- `toss_create_conditional_order`: 조건주문 생성
+- `toss_modify_conditional_order`: 조건주문 수정
+- `toss_cancel_conditional_order`: 조건주문 취소
+
+0.3.0은 REST 도구 20개를 추가해 **조회 34개·거래 6개**를 제공합니다. 로컬 stdio 방식이며 WebSocket이나 원격 HTTP/SSE 서버는 제공하지 않습니다.
 
 특징:
 
-- `npx tossinvest-mcp`로 실행되므로 별도 프로그램 설치 과정이 짧습니다.
-- API Key와 Secret Key는 환경변수로 전달합니다.
-- OAuth 토큰은 내부에서 자동 발급하고, 만료 60초 전에 자동 갱신합니다.
-- 계좌가 필요한 기능은 기본적으로 `accountSeq` 1번 계좌를 사용합니다.
-- 계좌가 여러 개이거나 다른 계좌를 쓰고 싶으면 `TOSSINVEST_ACCOUNT` 값으로 변경할 수 있습니다.
-- 주문 생성, 정정, 취소 기능은 기본적으로 꺼져 있습니다.
-- 주문 기능을 켜도 기본값에서는 `confirmOrderAction: true` 확인값이 없으면 주문 API를 호출하지 않습니다.
-- 주문 한도, 매도/시장가 차단, 종목 허용목록, 일일 한도 같은 가드레일을 환경변수로 켤 수 있고, 모든 검사는 토스증권 주문 API 호출 전에 서버에서 강제됩니다. (아래 `거래 가드레일` 참고)
-
-
-중요: `toss_modify_order`는 기존 주문을 그 자리에서 수정하는 단순 PATCH가 아닙니다. 토스증권 API는 원주문을 대체하는 방식으로 처리하며, 정정 후 새 `orderId`를 반환합니다. 이후 주문 상세 조회, 재정정, 취소에는 새로 받은 `orderId`를 사용하세요.
+- `npx`로 실행되므로 별도 프로그램 설치 과정이 짧습니다.
+- Client ID와 Client Secret은 환경변수로 전달합니다. 이전 이름인 API Key·Secret Key 환경변수도 호환됩니다.
+- OAuth 토큰은 내부에서 자동 발급하고, 만료 60초 전에 갱신합니다. 같은 컴퓨터·OS 사용자·저장 경로에서는 여러 프로세스가 토큰과 주문 집계를 공유합니다.
+- 계좌가 필요한 기능은 AI가 계좌 목록을 확인한 뒤 `accountSeq`를 입력합니다. 계좌 1을 자동 선택하지 않습니다.
+- `TOSSINVEST_ACCOUNT`를 설정하면 해당 계좌로 고정하며, 다른 계좌를 지정한 호출은 거절합니다.
+- 일반 주문·조건주문 생성, 정정, 취소 기능은 기본적으로 꺼져 있습니다.
+- 거래 기능을 켜면 `confirmOrderAction` 없이 주문할 수 있습니다. 매도·시장가 차단 설정도 제거되었습니다.
+- 1회 금액 한도, 시장별 일일 금액·건수 한도, 종목 허용목록은 필요한 항목만 환경변수로 설정할 수 있습니다. (아래 `거래 가드레일` 참고)
 
 ## 설치방법
 
@@ -84,16 +94,16 @@ node -v
 
 `v20` 이상이 나오면 다음 단계로 넘어가면 됩니다.
 
-Node.js가 없거나 버전이 낮다면 https://nodejs.org 에서 LTS 버전을 설치한 뒤 터미널을 새로 열어 다시 확인하세요.
+Node.js가 없거나 버전이 낮다면 [Node.js 공식 사이트](https://nodejs.org)에서 LTS 버전을 설치한 뒤 터미널을 새로 열어 다시 확인하세요.
 
-### 2. 토스증권 Open API Key 준비
+### 2. 토스증권 Open API 연결 정보 준비
 
 토스증권 WTS에 로그인한 뒤 Open API 설정 화면으로 이동합니다.
 
 그 화면에서 아래 값을 발급받아 둡니다.
 
-- `API Key`
-- `Secret Key`
+- `Client ID`
+- `Client Secret`
 
 이 두 값은 MCP 설정에 넣어야 합니다. 다른 사람에게 공유하지 마세요.
 
@@ -133,10 +143,10 @@ MCP 클라이언트의 설정 파일 또는 MCP Servers 설정 화면에 아래 
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["tossinvest-mcp"],
+      "args": ["-y", "tossinvest-mcp@0.3.0"],
       "env": {
-        "TOSSINVEST_API_KEY": "발급받은-API-Key",
-        "TOSSINVEST_SECRET_KEY": "발급받은-Secret-Key"
+        "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
+        "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret"
       }
     }
   }
@@ -145,13 +155,13 @@ MCP 클라이언트의 설정 파일 또는 MCP Servers 설정 화면에 아래 
 
 설정 후 MCP 클라이언트를 완전히 종료했다가 다시 실행하세요.
 
-처음 실행할 때 npm이 `tossinvest-mcp` 패키지를 자동으로 내려받습니다.
+처음 실행할 때 npm이 지정한 버전의 `tossinvest-mcp` 패키지를 내려받습니다. 위 예시는 0.3.0을 고정해 실행합니다.
 
-### 5. 계좌번호 확인
+`env` 안에 연결 정보를 넣으면 별도 `.env` 파일은 필요하지 않습니다. 서버가 `.env` 파일을 자동으로 읽지는 않습니다. 다른 MCP가 이미 등록되어 있다면 기존 설정을 덮어쓰지 말고 `mcpServers` 안에 `tossinvest` 항목만 추가하세요.
 
-처음에는 `TOSSINVEST_ACCOUNT`를 넣지 않아도 됩니다. 이 프로그램은 기본값으로 `accountSeq` 1번 계좌를 사용합니다.
+### 5. 계좌 확인
 
-다만 계좌가 여러 개이거나 1번 계좌가 맞는지 확인하고 싶다면 계좌 목록을 조회하세요.
+처음에는 `TOSSINVEST_ACCOUNT`를 넣지 않아도 됩니다. 시세 조회에는 계좌가 필요하지 않습니다. 보유 주식이나 주문처럼 계좌가 필요한 기능에서는 AI가 계좌 목록을 확인한 뒤 `accountSeq`를 입력합니다.
 
 MCP 클라이언트에서 다음처럼 요청합니다.
 
@@ -159,37 +169,27 @@ MCP 클라이언트에서 다음처럼 요청합니다.
 토스증권 계좌 목록을 조회해줘.
 ```
 
-응답에서 `accountSeq` 값을 찾습니다. 다른 계좌를 기본 계좌로 쓰고 싶다면 설정에 아래 값을 추가하거나 바꾸면 됩니다.
+응답의 `accountSeq`는 **실제 계좌번호가 아니라 API에서 사용하는 계좌 순번**입니다. 계좌가 하나면 AI가 선택할 수 있고, 여러 개여서 원하는 계좌를 구분하기 어려우면 사용자에게 확인하도록 도구에 안내되어 있습니다.
 
-```json
-"TOSSINVEST_ACCOUNT": "1"
-```
-
-예를 들어 `accountSeq`가 `2`인 계좌를 쓰고 싶다면 이렇게 설정합니다.
-
-```json
-"TOSSINVEST_ACCOUNT": "2"
-```
-
-계좌번호를 명시한 전체 예시는 다음과 같습니다.
+특정 계좌만 사용하려면 확인한 `accountSeq`를 `TOSSINVEST_ACCOUNT`에 넣습니다. 예를 들어 순번이 2인 계좌를 고정하려면 다음처럼 설정합니다.
 
 ```json
 {
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["tossinvest-mcp"],
+      "args": ["-y", "tossinvest-mcp@0.3.0"],
       "env": {
-        "TOSSINVEST_API_KEY": "발급받은-API-Key",
-        "TOSSINVEST_SECRET_KEY": "발급받은-Secret-Key",
-        "TOSSINVEST_ACCOUNT": "1"
+        "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
+        "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
+        "TOSSINVEST_ACCOUNT": "2"
       }
     }
   }
 }
 ```
 
-`TOSSINVEST_ACCOUNT`를 설정하지 않으면 기본값 `1`을 사용합니다. 설정하면 보유 주식, 주문 목록, 매수 가능 금액처럼 계좌가 필요한 기능에서 해당 계좌를 기본으로 사용합니다.
+설정하면 계좌 관련 기능을 해당 계좌로 고정하며, 다른 `accountSeq`를 지정한 호출은 거절합니다. 미설정 시 기본 계좌는 없고, 계좌 관련 도구마다 `accountSeq`가 필요합니다.
 
 ### 6. 조회 기능 테스트
 
@@ -228,11 +228,11 @@ AAPL 최근 체결 내역 10개를 조회해줘.
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["tossinvest-mcp"],
+      "args": ["-y", "tossinvest-mcp@0.3.0"],
       "env": {
-        "TOSSINVEST_API_KEY": "발급받은-API-Key",
-        "TOSSINVEST_SECRET_KEY": "발급받은-Secret-Key",
-        "TOSSINVEST_ACCOUNT": "1",
+        "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
+        "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
+        "TOSSINVEST_ACCOUNT": "2",
         "TOSSINVEST_ENABLE_TRADING": "true"
       }
     }
@@ -240,173 +240,160 @@ AAPL 최근 체결 내역 10개를 조회해줘.
 }
 ```
 
-거래 기능을 켜도 주문 도구는 추가 확인값이 없으면 실행되지 않습니다. 주문 생성, 정정, 취소 도구는 요청 입력에 `confirmOrderAction: true`가 있어야 토스증권 API를 호출합니다.
+`TOSSINVEST_ACCOUNT`의 2는 예시입니다. 계좌 목록에서 확인한 순번으로 바꾸세요. 설정 후 MCP 클라이언트를 완전히 종료했다가 다시 실행합니다.
 
-### `confirmOrderAction`을 true로 넣는 방법
+0.3.0에서는 **`confirmOrderAction` 확인값 없이 일반 주문과 조건주문을 생성·정정·취소할 수 있습니다.** 매도와 시장가도 거래 기능을 켜면 사용할 수 있습니다. 금액·건수 한도가 필요하다면 아래 설정을 함께 넣으세요.
 
-`confirmOrderAction`은 MCP 설정에 넣는 환경변수가 아닙니다. 주문 생성, 정정, 취소 도구를 호출할 때마다 들어가는 주문 요청 입력값입니다.
-
-예를 들어 주문 생성 도구의 실제 입력은 이런 형태입니다.
-
-```json
-{
-  "confirmOrderAction": true,
-  "symbol": "005930",
-  "side": "BUY",
-  "orderType": "LIMIT",
-  "quantity": "1",
-  "price": "70000"
-}
-```
-
-MCP 클라이언트에서 자연어로 요청할 때는 아래처럼 명확히 말하는 것이 좋습니다.
+MCP 클라이언트에서 자연어로 요청할 때는 아래처럼 구체적으로 말하는 것이 좋습니다.
 
 ```text
-토스증권에서 삼성전자 1주를 70000원 지정가로 매수 주문해줘.
-실제 주문 실행을 확인하며 confirmOrderAction 값을 true로 넣어줘.
-```
-
-정정이나 취소도 마찬가지입니다.
-
-```text
-이 주문을 71000원으로 정정해줘.
-실제 주문 정정을 확인하며 confirmOrderAction 값을 true로 넣어줘.
+토스증권에서 선택한 계좌로 삼성전자 1주를 70000원 지정가로 매수 주문해줘.
 ```
 
 ```text
-이 주문을 취소해줘.
-실제 주문 취소를 확인하며 confirmOrderAction 값을 true로 넣어줘.
+이 주문을 71000원으로 정정해줘. 정정 후 새 주문 ID도 알려줘.
 ```
 
-클라이언트에 따라 주문 도구 실행 전에 승인 버튼이나 확인 창을 보여줄 수 있습니다. 그 경우에도 `confirmOrderAction: true`가 주문 tool 입력에 포함되어야 합니다.
-
-### 확인값 없이 주문 실행하기 (자동화)
-
-> 참고: 이전 버전의 `TOSSINVEST_YOLO_TRADING` 옵션은 제거되었습니다. 확인값을 끄더라도 나머지 가드레일은 그대로 적용됩니다.
-
-자동화 환경처럼 매번 `confirmOrderAction: true`를 넣기 어렵다면 확인 요구만 끌 수 있습니다.
-
-```json
-"TOSSINVEST_REQUIRE_ORDER_CONFIRMATION": "false"
+```text
+이 주문을 취소해줘. 취소가 확인됐는지도 조회해줘.
 ```
 
-이 값을 끄면 `confirmOrderAction` 없이도 주문을 보낼 수 있지만, 주문 한도·매도/시장가 차단·종목 허용목록·일일 한도 등 켜져 있는 다른 가드레일은 계속 적용됩니다. 확인값을 끄기 전에 금액/일일 한도를 함께 설정해 두는 것을 강력히 권장합니다.
+### 고액 주문 확인: `confirmHighValueOrder`
+
+`confirmHighValueOrder`는 환경변수가 아니라 주문 입력값입니다. 토스가 고액 주문 확인을 요구하면 사용자가 금액을 확인하고 승인한 경우에만 `true`로 전달해야 합니다. AI가 오류를 우회하려고 자동으로 `true`로 바꾸면 안 됩니다.
+
+이 프로그램은 고액 여부를 별도로 판정하지 않고 토스의 오류 코드·안내를 전달합니다. 아래의 시장가 버퍼는 MCP의 주문 예산용이며 토스의 고액 주문 판정 기준과는 다릅니다.
 
 ## 거래 가드레일
 
-가드레일은 "AI가 실수로, 또는 너무 크게/너무 자주 주문을 넣는 것"을 막아 주는 안전장치입니다. 모든 검사는 주문이 토스증권 서버에 도달하기 **전에** 이 프로그램 안에서 이루어지므로, 한도를 넘는 주문은 애초에 토스로 전송되지 않습니다.
+가드레일은 "AI가 실수로, 또는 너무 크게/너무 자주 주문을 넣는 것"을 줄이기 위한 안전장치입니다. 설정한 한도는 주문 API를 호출하기 전에 검사합니다. 실제 체결금액·수수료·세금·손익을 관리하는 기능은 아닙니다.
 
-모든 옵션은 MCP 설정의 `env`에 한 줄씩 추가해 켜며, 켜지 않은 옵션은 적용되지 않습니다(기본값은 보수적입니다). 값은 모두 문자열로 적습니다. 예: `"TOSSINVEST_MAX_ORDER_AMOUNT_KRW": "500000"`.
+옵션은 MCP 설정의 `env`에 추가합니다. **금액·건수 한도와 종목 허용목록은 기본값이 없으며, 설정한 항목만 적용됩니다.** 값은 모두 문자열로 적습니다. 예: `"TOSSINVEST_MAX_ORDER_AMOUNT_KRW": "500000"`.
 
 ### 한눈에 보기 (요약 표)
 
 | 이름 | 기본값 | 한 줄 설명 |
 | --- | --- | --- |
-| `TOSSINVEST_REQUIRE_ORDER_CONFIRMATION` | `true` | 주문마다 `confirmOrderAction: true` 확인값을 요구 |
 | `TOSSINVEST_MAX_ORDER_AMOUNT_KRW` | 없음 | 1회 주문 금액 상한(원) |
 | `TOSSINVEST_MAX_ORDER_AMOUNT_USD` | 없음 | 1회 주문 금액 상한(달러) |
-| `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW` | 없음 | 하루 누적 주문 금액 상한(원) |
-| `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD` | 없음 | 하루 누적 주문 금액 상한(달러) |
-| `TOSSINVEST_DAILY_MAX_ORDER_COUNT` | 없음 | 하루 주문 건수 상한 |
-| `TOSSINVEST_ALLOWED_SYMBOLS` | 없음 | 거래 가능 종목만 지정(화이트리스트) |
-| `TOSSINVEST_ALLOW_SELL_ORDERS` | `false` | 매도 주문 허용 여부 |
-| `TOSSINVEST_ALLOW_MARKET_ORDERS` | `false` | 시장가 주문 허용 여부 |
-| `TOSSINVEST_MARKET_ORDER_BUFFER_PCT` | `5` | 시장가 한도 계산용 여유 버퍼(%) |
-| `TOSSINVEST_LOCK_ACCOUNT` | `true` | 지정한 기본 계좌로만 주문하도록 잠금 |
-| `TOSSINVEST_GUARD_STATE_PATH` | OS 데이터 폴더 | 하루 한도 집계를 저장하는 파일 경로 |
+| `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW` | 없음 | 국내 일일 주문 금액 상한(원) |
+| `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD` | 없음 | 미국 일일 주문 금액 상한(달러) |
+| `TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW` | 없음 | 국내 일일 생성·정정 성공 건수 상한 |
+| `TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD` | 없음 | 미국 일일 생성·정정 성공 건수 상한 |
+| `TOSSINVEST_ALLOWED_SYMBOLS` | 없음 | 거래 가능 종목만 지정 |
+| `TOSSINVEST_MARKET_ORDER_BUFFER_PCT` | `3` | 수량 시장가 주문의 예산 계산 버퍼(%) |
+| `TOSSINVEST_DATA_DIR` | OS 데이터 폴더 | 토큰과 일일 집계를 공유할 디렉터리 |
+| `TOSSINVEST_GUARD_STATE_PATH` | 자동 지정 | 기존 상태 파일 경로 및 새 상태 파일명 접두사 |
 
 ### 옵션별 상세 설명
 
-#### `TOSSINVEST_REQUIRE_ORDER_CONFIRMATION` (기본: `true`)
-주문 생성·정정·취소를 하려면 요청에 `confirmOrderAction: true`가 들어 있어야 실제로 토스에 전송됩니다. AI가 대화 중에 실수로 주문을 넣는 것을 막는 가장 기본적인 안전장치입니다. 자동화처럼 매번 확인값을 넣기 어려우면 `"false"`로 끌 수 있는데, 끄더라도 아래의 금액·건수·종목·매도/시장가 한도는 그대로 적용됩니다. **끄기 전에는 금액·일일 한도를 함께 설정하는 것을 강력히 권장합니다.**
+#### `TOSSINVEST_MAX_ORDER_AMOUNT_KRW` / `TOSSINVEST_MAX_ORDER_AMOUNT_USD` (기본: 없음)
 
-#### `TOSSINVEST_MAX_ORDER_AMOUNT_KRW` (기본: 없음)
-원화 주문 **한 건**의 금액 상한입니다. 주문 추정 금액(지정가는 수량 × 가격, 시장가는 호가 + 버퍼)이 이 값을 넘으면 차단합니다. 예: `"500000"` → 한 번에 50만 원을 넘는 원화 주문을 막습니다. 설정하지 않으면 1회 금액 제한이 없습니다.
+주문 한 건의 금액 상한입니다. KRW는 원화, USD는 달러 기준이며 **원↔달러 환산은 하지 않습니다.** 예를 들어 KRW에 `"500000"`을 설정하면 50만 원 초과 주문을 차단합니다. 양수인 금액을 넣고, 소수점도 사용할 수 있습니다.
 
-#### `TOSSINVEST_MAX_ORDER_AMOUNT_USD` (기본: 없음)
-미국(달러) 주식 주문 **한 건**의 금액 상한(달러)입니다. 예: `"1000"` → 1회 1,000달러 초과 주문 차단. **원↔달러 환산은 하지 않습니다.** 원화 한도는 원화 주문에만, 달러 한도는 달러 주문에만 적용되므로, 두 시장을 모두 거래한다면 KRW·USD 한도를 모두 설정하세요.
+#### `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW` / `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD` (기본: 없음)
 
-#### `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW` (기본: 없음)
-**하루 동안**(한국 시간 기준, 자정에 초기화) 이 프로그램으로 넣은 원화 주문 금액의 누적 상한입니다. 예: `"2000000"` → 하루 합계 200만 원까지만 주문. 정정 주문도 누적에 반영되고, 취소는 반영되지 않습니다(아래 "하루 한도 계산 방식" 참고).
+이 MCP로 접수한 주문 예산의 일일 상한입니다. 같은 범위의 매수·매도를 합산하며, 국내·미국 금액은 따로 계산합니다. 예를 들어 20달러 매수 후 20달러 매도 주문을 하면 사용액은 40달러입니다.
 
-#### `TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_USD` (기본: 없음)
-위 항목의 달러 버전입니다. 하루 누적 달러 주문 금액 상한.
+| 시장 | 금액·건수 초기화 시각 |
+| --- | --- |
+| 국내(KRW) | 매일 **KST 20:01** |
+| 미국(USD) | 매일 **KST 10:01** |
 
-#### `TOSSINVEST_DAILY_MAX_ORDER_COUNT` (기본: 없음)
-**하루 주문 건수** 상한입니다. 예: `"10"` → 하루 10건까지만. 정정은 새 주문 1건으로 셉니다. 취소는 건수에 포함하지 않습니다. 과도하게 잦은 매매를 막고 싶을 때 유용합니다.
+자정에는 초기화하지 않습니다. 한국 시간 고정이며 서머타임·휴장일에 따라 자동 변경하지 않습니다. 예를 들어 월요일 밤의 미국 주문과 화요일 오전 10:00의 미국 주문은 같은 구간이고, 화요일 10:01부터 새 한도를 사용합니다.
+
+#### `TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW` / `TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD` (기본: 없음)
+
+계좌별·시장별 생성·정정 성공 건수 상한입니다. 국내에 `"5"`, 미국에 `"10"`을 넣으면 각각 5건·10건으로 제한합니다. 정정도 성공할 때마다 1건으로 셉니다. 취소는 건수에 포함하지 않고 기존 건수를 돌려주지도 않습니다.
+
+한쪽 시장의 한도를 소진해도 다른 시장에는 영향을 주지 않습니다. 한쪽만 설정하면 다른 시장은 건수 제한이 없습니다. 기존 합산 변수 `TOSSINVEST_DAILY_MAX_ORDER_COUNT`가 남아 있으면 아래 변경 사항의 호환 규칙을 확인하세요.
 
 #### `TOSSINVEST_ALLOWED_SYMBOLS` (기본: 없음)
-거래를 **허용할 종목만** 콤마로 나열합니다. 목록에 없는 종목의 주문은 차단됩니다(생성·정정 모두). 예: `"005930,AAPL,VOO"`(삼성전자, 애플, VOO). 국내는 6자리 숫자 코드, 미국은 티커를 씁니다. 설정하지 않으면 모든 종목을 허용합니다. "정해둔 종목만 거래"하고 싶을 때 사용하세요.
 
-#### `TOSSINVEST_ALLOW_SELL_ORDERS` (기본: `false`)
-매도 주문 허용 여부입니다. 기본값은 **매수만 허용**이며, 매도 주문을 내려면 `"true"`로 켜야 합니다. 생성뿐 아니라 **정정**에도 적용됩니다(매도 주문 정정은 매도가 허용돼 있어야 가능). 이미 낸 주문의 **취소**는 항상 가능합니다.
+거래를 허용할 종목만 콤마로 나열합니다. 목록에 없는 종목의 생성·정정은 차단됩니다. 예: `"005930,AAPL,VOO"`. 국내는 6자리 숫자 코드, 미국은 티커를 씁니다. 조회 종목을 제한하는 설정은 아닙니다.
 
-#### `TOSSINVEST_ALLOW_MARKET_ORDERS` (기본: `false`)
-시장가(`MARKET`) 주문 허용 여부입니다. 기본값은 **시장가 차단**(가격을 직접 정하는 지정가 `LIMIT`만 허용)입니다. 시장가는 체결 가격이 예상과 다르게 불리해질 수 있어 보수적으로 꺼 둡니다. 시장가가 필요하면 `"true"`로 켜세요. 이 차단은 **정정**에도 적용되어, 시장가가 꺼져 있으면 지정가 주문을 정정으로 시장가로 바꿀 수 없습니다.
+#### `TOSSINVEST_MARKET_ORDER_BUFFER_PCT` (기본: `3`)
 
-#### `TOSSINVEST_MARKET_ORDER_BUFFER_PCT` (기본: `5`)
-시장가 **매수**의 예상 금액을 계산할 때 현재 호가에 더하는 여유 버퍼(%)입니다. 금액 한도를 보수적으로(조금 더 크게 잡아) 검사하기 위한 값입니다. 예: `5`면 호가보다 5% 높게 잡아 한도를 검사합니다. 시장가를 켰을 때만 의미가 있습니다.
+수량 기반 시장가 주문의 예산을 계산할 때 직전 체결가(`lastPrice`)에 적용하는 비율입니다. 국내·미국 모두 같은 방식이며, 설정 범위는 `0 이상 100 미만`입니다.
 
-#### `TOSSINVEST_LOCK_ACCOUNT` (기본: `true`)
-주문 요청에 들어온 `accountSeq`가 기본 계좌(`TOSSINVEST_ACCOUNT`)와 다르면 차단합니다. 실수로 다른 계좌에 주문이 나가는 것을 막습니다. 여러 계좌를 오가며 주문해야 한다면 `"false"`로 끄세요.
+| 주문 방식 | 한도 검사·집계 금액 |
+| --- | --- |
+| 지정가 | 수량 × 주문가격 |
+| 금액 지정 시장가 | `orderAmount` |
+| 수량 지정 시장가 매수 | 수량 × 직전 체결가 × `(1 + p/100)` |
+| 수량 지정 시장가 매도 | 수량 × 직전 체결가 × `(1 - p/100)` |
 
-#### `TOSSINVEST_GUARD_STATE_PATH` (기본: OS 데이터 폴더)
-하루 한도 집계를 저장하는 파일의 경로입니다. 보통 신경 쓸 필요가 없습니다(미설정 시 OS 데이터 폴더의 `tossinvest-mcp/guard-state.json`). 같은 컴퓨터에서 이 MCP를 **여러 개 동시에** 띄운다면 인스턴스마다 다른 경로로 지정하세요(아래 "여러 인스턴스 사용 시" 참고).
+기본 p가 3이므로 매수는 +3%, 매도는 −3%를 적용합니다. 국내 주문에 대한 토스의 상·하한가 기반 고액 판정과는 다르며, 실제 체결금액이나 접수 결과를 보장하지 않습니다. 금액 한도에 필요한 가격을 확인하지 못하면 주문을 차단하고, 금액 한도가 없으면 집계 목적만의 시세 조회는 생략합니다.
 
-### 처음 거래를 켤 때 권장 설정
+#### `TOSSINVEST_DATA_DIR` / `TOSSINVEST_GUARD_STATE_PATH`
 
-거래를 처음 켤 때는 한도를 작게 잡아 두는 것을 권장합니다. 아래는 "국내 주식만, 정해둔 종목만, 지정가만, 1회·하루 금액과 건수를 제한"한 보수적인 예시입니다.
+보통 직접 지정할 필요는 없습니다. 기본 데이터 디렉터리는 다음과 같습니다.
+
+- macOS: `~/Library/Application Support/tossinvest-mcp`
+- Windows: `%LOCALAPPDATA%/tossinvest-mcp`
+- Linux: `$XDG_DATA_HOME/tossinvest-mcp` 또는 `~/.local/share/tossinvest-mcp`
+
+토큰과 주문 집계는 키별로 나누어 저장합니다. 새 주문 상태 파일은 `guard-v4-<키 식별자>.json`이며, `TOSSINVEST_GUARD_STATE_PATH`를 지정하면 그 경로에 `.v4-<키 식별자>.json`을 붙입니다.
+
+같은 컴퓨터·OS 사용자에서 같은 키의 한도를 공유하려면 모든 MCP 프로세스에 **같은 저장 경로와 같은 한도 설정**을 사용하세요. 프로세스 간 잠금으로 토큰 발급과 주문 예산을 공유합니다. 다른 컴퓨터나 별도 저장 경로에서 같은 키로 토큰을 발급하면 기존 토큰과 충돌할 수 있습니다. Secret Key는 상태 파일에 저장하지 않습니다.
+
+### 처음 거래를 켤 때 예시 설정
+
+거래를 처음 켤 때는 한도를 작게 잡아 두는 것을 권장합니다. 아래는 삼성전자 주문만 허용하고 1회 30만 원·일일 100만 원·국내 생성·정정 성공 5건으로 제한한 예시입니다.
 
 ```json
 {
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["tossinvest-mcp"],
+      "args": ["-y", "tossinvest-mcp@0.3.0"],
       "env": {
-        "TOSSINVEST_API_KEY": "발급받은-API-Key",
-        "TOSSINVEST_SECRET_KEY": "발급받은-Secret-Key",
-        "TOSSINVEST_ACCOUNT": "1",
+        "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
+        "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
+        "TOSSINVEST_ACCOUNT": "2",
         "TOSSINVEST_ENABLE_TRADING": "true",
         "TOSSINVEST_ALLOWED_SYMBOLS": "005930",
         "TOSSINVEST_MAX_ORDER_AMOUNT_KRW": "300000",
         "TOSSINVEST_DAILY_MAX_ORDER_AMOUNT_KRW": "1000000",
-        "TOSSINVEST_DAILY_MAX_ORDER_COUNT": "5"
+        "TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW": "5"
       }
     }
   }
 }
 ```
 
-이 예시는 매도와 시장가가 기본값(`false`)으로 꺼져 있어 **삼성전자 지정가 매수만**, 1회 30만 원·하루 100만 원·하루 5건까지만 허용합니다. 익숙해진 뒤 종목과 한도를 조금씩 넓혀 가세요.
+`TOSSINVEST_ACCOUNT`는 계좌 목록에서 확인한 순번으로 바꾸세요. 이 예시는 **매도와 시장가를 차단하지 않습니다.** 원하는 주문 방식은 AI에게 구체적으로 지시하세요. 두 시장을 모두 거래하려면 USD 금액·건수 한도도 각각 설정합니다.
 
-참고 사항:
+### 하루 한도 계산 방식
 
-- **통화별 한도**: KRW 한도만 설정하면 USD 주문에는 단일/일일 금액 한도가 적용되지 않습니다(그 반대도 마찬가지). 두 통화를 모두 거래한다면 양쪽 한도를 설정하세요.
-- **일일 한도 범위**: 이 MCP를 통해 성공한 주문만 가드 상태 파일에 기록·집계합니다. 토스앱 등 계좌의 다른 활동은 포함하지 않습니다(단일 세션·단일 MCP 전제).
-- **여러 인스턴스 사용 시**: 일일 한도 직렬화는 단일 프로세스 안에서만 보장됩니다. 같은 OS 사용자로 이 MCP를 여러 개 동시에 실행하면 기본 상태 파일 경로가 같아 집계가 서로 덮어써져 한도가 어긋날 수 있습니다. 인스턴스마다 `TOSSINVEST_GUARD_STATE_PATH`를 서로 다른 경로로 분리해 지정하세요(인스턴스별 독립 한도). 한 계좌의 한도를 여러 인스턴스가 공유해야 한다면 인스턴스를 하나로 합치는 것을 권장합니다.
-- **하루 한도 계산 방식**: 생성과 정정 주문이 당일 건수/금액에 집계됩니다(정정은 새 주문 1건으로 카운트하고, 대체된 원주문은 체결된 금액만 반영). 취소는 한도에 포함되지 않으며 항상 허용됩니다(리스크 축소 경로를 막지 않기 위함). 하루 **금액** 한도가 켜져 있으면, 한도 검사 시 당일 미체결 주문을 토스 API로 다시 조회해 `체결금액 + 미체결 잔량`으로 매번 재계산하고, 체결·취소·거부·정정완료된 주문은 실제 체결금액만 확정 반영합니다. 미체결 주문 조회에 실패하면 검증 불가로 간주해 신규 주문을 차단합니다. (건수 한도만 켠 경우에는 이 재조회 없이 당일 기록 건수만으로 판단합니다.)
-- **추정 불가 시 차단**: 가격·호가·통화를 확정할 수 없거나 상태 파일을 읽을 수 없으면 안전을 위해 주문을 차단합니다. 추측으로 주문을 진행하지 않습니다.
-- **응답 지연 보호**: 토스 API 요청은 20초 안에 응답이 없으면 자동으로 중단되어, 네트워크 문제로 도구가 무한정 멈추지 않습니다.
-- **clientOrderId**: 입력에 없으면 `tossinvest-mcp-YYYYMMDD-` 접두로 자동 생성합니다. 토스는 이 값을 10분간 중복 주문 방지 키로 사용합니다.
+- **범위**: API 키·계좌·시장별로 분리하고 같은 범위의 매수·매도를 합산합니다. 토스 앱 등 다른 경로의 거래는 포함하지 않습니다.
+- **신규 주문**: 접수 전에 예산을 예약하고 접수 결과를 기록합니다. 명확한 거절이면 예약을 해제하지만, 접수 여부가 불명확하면 유지합니다.
+- **정정**: 기존 미체결 부분과 대체 주문금액의 차액을 반영합니다. 1회 금액 상한은 대체 주문 전체에 적용합니다.
+- **취소**: 실제 취소가 확인된 미체결 부분만 차감하고 체결분은 남깁니다. 차감에는 저장한 기준가격·버퍼를 사용하며 당시 시세로 다시 평가하지 않습니다.
+- **집계 구간**: 예약한 시점의 시장별 구간에 기록합니다. 응답이 초기화 이후에 도착해도 원래 구간에 반영합니다. 지난 구간의 주문을 취소해 새 구간의 사용액을 줄이지 않습니다.
+- **조회 범위**: 전체 주문을 매번 재조회하지 않고 정정·취소 대상과 미확정 작업만 확인합니다. 앱에서 한 변경·자동 만료·체결가 변동은 상시 재집계하지 않습니다.
+- **건수와 감소 주문**: 생성·정정 성공은 각 1건입니다. 일일 한도를 소진해도 취소나 사용액을 줄이는 정정은 허용합니다. 허용된 감액 정정도 성공 건수에는 추가됩니다.
+- **조건주문**: 등록·수정 구간에 SINGLE=해당 조건, OCO=큰 조건금액, OTO=두 조건 합계로 집계합니다. 1회 한도는 각 조건에 적용합니다. 나중에 발동한 자식 주문을 다시 집계하지 않으며, 미래 발동일의 금액까지 제한하는 기능은 아닙니다.
+- **취소 확인 불가**: 조건주문 취소 뒤 상세 내역이 404로 사라지면 조건별 취소·발동 여부를 추정하지 않고 예산 전액을 유지하며 경고합니다. 이미 발동한 자식 주문은 일반 주문 API로 취소해야 합니다.
+- **요청 식별자**: `clientOrderId`가 없으면 자동 생성합니다. 같은 키·같은 내용의 생성 요청은 토스의 10분 멱등 기간에 중복 집계하지 않습니다. 자동 복구 재전송은 9분 이내로 제한합니다. 접수 여부가 불명확할 때 새 키로 다시 주문하지 마세요.
 
 ## 환경변수 설명
 
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
-| `TOSSINVEST_API_KEY` | 예 | 토스증권 Open API 화면의 API Key |
-| `TOSSINVEST_SECRET_KEY` | 예 | 토스증권 Open API 화면의 Secret Key |
-| `TOSSINVEST_ACCOUNT` | 아니오 | 기본으로 사용할 토스증권 `accountSeq`. 미설정 시 `1` |
+| `TOSSINVEST_CLIENT_ID` | 예 | 토스증권 Client ID. 이전 이름 `TOSSINVEST_API_KEY`도 호환 |
+| `TOSSINVEST_CLIENT_SECRET` | 예 | 토스증권 Client Secret. 이전 이름 `TOSSINVEST_SECRET_KEY`도 호환 |
+| `TOSSINVEST_ACCOUNT` | 아니오 | 고정할 계좌 순번. 미설정 시 계좌 관련 도구마다 `accountSeq` 입력 |
 | `TOSSINVEST_BASE_URL` | 아니오 | 기본값은 `https://openapi.tossinvest.com` |
-| `TOSSINVEST_ENABLE_TRADING` | 아니오 | `true`로 설정해야 주문 생성, 정정, 취소 도구가 등록됩니다 |
+| `TOSSINVEST_ENABLE_TRADING` | 아니오 | 기본 `false`. `true`일 때 일반 주문·조건주문 생성·정정·취소 도구 등록 |
 
-거래 가드레일 관련 환경변수는 위의 `거래 가드레일` 표를 참고하세요.
+거래 가드레일과 저장 경로 관련 환경변수는 위의 `거래 가드레일` 표를 참고하세요. 전체 설정 예시는 [.env.example](.env.example)에 있습니다. 일반적인 MCP 앱 연결에서는 `.env` 파일 대신 앱의 `env` 설정에 값을 넣습니다.
 
 ## 문제 해결
 
 ### `node` 명령을 찾을 수 없다고 나옵니다
 
-Node.js가 설치되어 있지 않거나 PATH에 등록되지 않은 상태입니다. https://nodejs.org 에서 LTS 버전을 설치한 뒤 터미널을 새로 열고 다시 시도하세요.
+Node.js가 설치되어 있지 않거나 PATH에 등록되지 않은 상태입니다. [Node.js 공식 사이트](https://nodejs.org)에서 LTS 버전을 설치한 뒤 터미널을 새로 열고 다시 시도하세요.
 
 ### `허용되지 않은 IP 주소입니다.` 오류가 나옵니다
 
@@ -416,127 +403,146 @@ Node.js가 설치되어 있지 않거나 PATH에 등록되지 않은 상태입�
 
 ### MCP 클라이언트에 도구가 보이지 않습니다
 
-설정 JSON 문법이 올바른지 확인하고, MCP 클라이언트를 완전히 종료한 뒤 다시 실행하세요. `TOSSINVEST_API_KEY`와 `TOSSINVEST_SECRET_KEY`가 비어 있으면 서버가 시작되지 않습니다.
+설정 JSON 문법이 올바른지 확인하고, MCP 클라이언트를 완전히 종료한 뒤 다시 실행하세요. Client ID와 Client Secret이 비어 있으면 서버가 시작되지 않습니다. 이 프로그램은 로컬 stdio MCP를 등록할 수 있는 앱에서 사용합니다.
 
 ### 계좌 조회는 되는데 보유 주식 조회가 실패합니다
 
-보유 주식, 주문, 매수 가능 금액 같은 계좌 관련 기능에는 `accountSeq`가 필요합니다. 이 프로그램은 기본값으로 `1`을 사용합니다. 계좌 목록 조회 결과에서 다른 `accountSeq`를 써야 한다면 `TOSSINVEST_ACCOUNT`를 그 값으로 바꾸고 다시 실행하세요.
+계좌 목록에서 `accountSeq`를 확인하고 AI에게 사용할 계좌를 알려주세요. 0.3.0은 계좌 1을 자동 선택하지 않습니다. `TOSSINVEST_ACCOUNT`로 계좌를 고정한 경우에는 다른 계좌를 입력할 수 없습니다.
 
 ### 주문 도구가 보이지 않습니다
 
-정상입니다. 기본값으로는 주문 도구가 등록되지 않습니다. 실제 거래를 허용하려면 `TOSSINVEST_ENABLE_TRADING`을 `true`로 설정해야 합니다.
+정상입니다. 기본값으로는 주문 도구가 등록되지 않습니다. 실제 거래를 허용하려면 `TOSSINVEST_ENABLE_TRADING`을 `true`로 설정하고 MCP 클라이언트를 재시작해야 합니다.
 
-### `TOSSINVEST_ENABLE_TRADING`을 `true`로 설정했는데도 주문이 안 됩니다
+### 거래 기능을 켰는데도 주문이 안 됩니다
 
-주문 도구가 보이더라도 기본 설정에서는 주문 요청마다 `confirmOrderAction: true`가 필요합니다.
-
-AI에게 주문을 요청할 때 아래처럼 확인값을 넣으라고 명시하세요.
-
-```text
-실제 주문 실행을 확인하며 confirmOrderAction 값을 true로 넣어줘.
-```
-
-자동화 환경처럼 매번 이 값을 넣기 어렵다면 `TOSSINVEST_REQUIRE_ORDER_CONFIRMATION=false`로 확인 요구만 끌 수 있습니다. 이때도 금액·일일·매도·시장가 등 켜져 있는 다른 가드레일은 계속 적용됩니다.
+계좌 선택, 금액·건수 한도, 종목 허용목록과 토스가 반환한 오류를 확인하세요. `confirmOrderAction`은 제거되었으므로 입력에서 빼야 합니다. 고액 확인 오류는 사용자 승인 후 `confirmHighValueOrder`로 처리합니다.
 
 ### 주문 정정 후 기존 orderId로 조회한 내용이 이상합니다
 
-토스증권 주문 정정은 새 `orderId`를 반환합니다. 정정 응답의 새 `orderId`를 사용하세요.
+토스증권 주문 정정은 새 `orderId`를 반환합니다. 정정 응답의 새 ID를 사용하세요. 조건주문 수정도 새 `conditionalOrderId`를 사용합니다.
 
-### "cannot reconcile open order ..." 오류로 모든 주문이 막힙니다
+### 접수 여부가 불명확하거나 미확정 작업 때문에 주문이 막힙니다
 
-일일 **금액** 한도가 켜진 경우, 신규 주문 전에 당일 미체결 주문의 현재 상태를 토스 API로 조회해 한도를 재계산합니다. 이 조회가 실패하면 검증 불가로 간주해 안전하게 주문을 차단합니다(추측으로 진행하지 않음). 일시적인 네트워크/한도(429) 문제라면 잠시 후 다시 시도하면 해소됩니다. 가드 상태 파일에 더 이상 조회되지 않는 주문이 남아 계속 차단된다면, 거래가 없는 시간에 상태 파일(`TOSSINVEST_GUARD_STATE_PATH` 경로, 미설정 시 OS 데이터 폴더의 `tossinvest-mcp/guard-state.json`)을 백업 후 삭제하면 당일 집계가 초기화됩니다(이 MCP로 넣은 당일 주문 집계만 사라지며, 실제 주문에는 영향이 없습니다).
-
-### 주문이 `Order blocked: ...` 메시지와 함께 막힙니다
-
-대부분 설정한 가드레일에 걸린 **의도된 차단**입니다. 메시지의 키워드로 원인을 확인하세요(아래 `오류 및 차단 메시지 목록` 참고). 예: `... amount ... exceeds the per-order limit`는 1회 금액 한도 초과, `daily ... limit reached`는 하루 한도 도달, `... is not in TOSSINVEST_ALLOWED_SYMBOLS`는 허용목록 밖 종목입니다. 한도가 너무 빡빡하면 해당 환경변수를 조정하세요.
-
-### 매도(또는 시장가) 주문이 안 됩니다
-
-기본값에서 매도와 시장가는 꺼져 있습니다. 매도는 `TOSSINVEST_ALLOW_SELL_ORDERS=true`, 시장가는 `TOSSINVEST_ALLOW_MARKET_ORDERS=true`로 켜야 합니다. 이 차단은 **정정에도 적용**되어, 끈 상태에서는 정정으로도 매도/시장가 주문을 만들 수 없습니다.
+타임아웃이 났다고 주문이 거절된 것은 아닙니다. 오류의 `clientOrderId`·대상 주문 ID로 주문 목록/상세를 확인하고, 새 키로 재주문하지 마세요. 미확정 작업이 해결되기 전에는 신규·증액을 제한하며 취소 경로는 유지합니다. 상세 조회는 응답이 확인된 정정·취소의 뒤늦은 확정을 반영할 수 있고, 생성·정정을 재전송하지 않습니다.
 
 ### 하루 한도를 안 넘은 것 같은데 주문이 막힙니다
 
-하루 한도는 **이 MCP로 넣은 주문**만 집계하며, 생성과 **정정**이 모두 포함됩니다(정정은 새 주문 1건으로 카운트). 정정을 여러 번 했다면 건수가 빠르게 늘 수 있습니다. 또한 미체결 주문은 `체결금액 + 미체결 잔량`으로 보수적으로 계산됩니다. 자세한 규칙은 `거래 가드레일`의 "하루 한도 계산 방식"을 참고하세요.
+일일 금액은 매수와 매도를 합산하고 미체결 예약액도 포함합니다. 정정은 성공할 때마다 1건을 더하며, 취소해도 건수는 되돌아오지 않습니다. 국내는 KST 20:01, 미국은 KST 10:01에 초기화합니다. 가격을 확인할 수 없거나 이전 기록을 보수적으로 이월한 경우에도 차단될 수 있습니다.
 
-### 응답에 `_guardStateWarning`이 붙어 있습니다
+### 응답에 `_guardStateWarning` 또는 `_budgetRetained`가 붙어 있습니다
 
-`_guardStateWarning`이 보이면 **주문 자체는 이미 성공한 것**입니다. 다만 하루 한도 집계에 필요한 내부 기록이 일부 누락됐을 수 있다는 경고입니다. **절대 다시 주문하지 마세요(중복 주문 위험).** 들어간 주문은 주문 목록/상세 조회로 확인할 수 있습니다.
+접수 응답은 받았으나 한도 기록·최종 상태 확인이 끝나지 않았거나, 취소 후 내역을 확인할 수 없어 예산을 유지했다는 뜻입니다. **새 주문으로 다시 보내지 말고** 실제 주문 상태를 확인하세요. 경고가 사라졌다고 체결까지 완료됐다는 의미도 아닙니다.
+
+### 상태 파일을 읽을 수 없다고 나옵니다
+
+손상된 파일을 자동으로 사용액 0으로 초기화하지 않습니다. 모든 MCP 프로세스를 종료하고 파일을 백업한 뒤 원인을 확인하세요. 파일 삭제는 사용액을 잃게 하므로 한도를 푸는 방법으로 사용하지 마세요.
+
+### 응답에 `_warnings`가 붙어 있습니다
+
+폐기된 설정, 이전 환경변수 이름, 상태 이전 관련 안내입니다. 폐기 설정은 시작 로그와 해당 세션의 첫 도구 응답에도 알립니다. 안내에 따라 설정을 바꾼 뒤 재시작하세요. 비밀 값은 경고에 포함하지 않습니다.
 
 ## 오류 및 차단 메시지 목록
 
-이 프로그램이 낼 수 있는 주요 메시지와 의미입니다. `Order blocked:`로 시작하는 메시지는 주문이 토스에 전송되기 **전에** 안전을 위해 막은 것입니다(실제 주문은 나가지 않았습니다).
+이 프로그램이 낼 수 있는 주요 메시지와 의미입니다. 주문 전 검사에서 차단된 요청은 주문 API에 전송하지 않습니다. 반면 접수 불명·접수 후 경고는 이미 전송되었을 수 있으므로 구분해야 합니다.
 
-### 1) 주문 차단(가드레일) 메시지 — `Order blocked: ...`
+### 1) 주문 차단·입력 오류
 
 | 메시지 키워드 | 의미 | 해결 방법 |
 | --- | --- | --- |
-| `confirmOrderAction=true is required` | 주문 확인값 누락 | 요청에 `confirmOrderAction: true` 추가(또는 `TOSSINVEST_REQUIRE_ORDER_CONFIRMATION=false`) |
-| `account is locked to TOSSINVEST_ACCOUNT (...)` | 잠긴 기본 계좌와 다른 계좌로 주문 | 기본 계좌로 주문하거나 `TOSSINVEST_LOCK_ACCOUNT=false` |
-| `sell orders are disabled` | 매도가 꺼져 있음 | `TOSSINVEST_ALLOW_SELL_ORDERS=true` |
-| `market orders are disabled` | 시장가가 꺼져 있음 | `TOSSINVEST_ALLOW_MARKET_ORDERS=true` |
-| `... is not in TOSSINVEST_ALLOWED_SYMBOLS` | 허용목록 밖 종목 | 허용목록에 추가하거나 종목 변경 |
-| `estimated amount ... exceeds the per-order limit` | 1회 주문 금액 한도 초과 | 수량/가격을 줄이거나 한도를 올림 |
-| `daily order count limit reached (n/m)` | 하루 주문 건수 한도 도달 | 다음 날(KST) 초기화까지 대기하거나 한도 상향 |
-| `daily KRW/USD amount limit reached` | 하루 누적 금액 한도 도달 | 위와 동일 |
-| `국내 주식 주문 정정은 수량(quantity) 정정이 필수` | KR 정정에 수량 누락 | `quantity`를 명시 |
-| `미국 주식 주문 정정은 수량(quantity) 정정을 지원하지 않으며` | US 정정에 수량 전달 | `quantity`를 빼고 `price`만 입력 |
-| `시장가(MARKET) 주문 정정에는 가격(price)을 전달할 수 없습니다` | 시장가 정정에 가격 전달 | `price`를 빼고 정정 |
-| `지정가(LIMIT) 주문 정정에는 가격(price)이 필수` | 지정가 정정 가격 확인 불가 | `price`를 명시 |
-| `cannot determine the currency/order type/side/symbol of order ...` | 정정 대상 주문 정보 확인 불가 | `orderId`가 맞는지 확인하고 잠시 후 재시도(추측으로 진행하지 않음) |
-| `cannot estimate ... amount` / `best ask/bid unavailable` / `did not report a recognized currency` / `could not read a recognized currency` | 가격·호가·통화를 확정할 수 없음 | 장중 호가가 있는지 확인 후 재시도(특히 시장가는 호가 필요) |
-| `cannot reconcile open order ... against the daily limit` | 미체결 주문 상태 조회 실패 | 위 "cannot reconcile open order" 항목 참고 |
-| `cannot read guard state file` / `is not valid JSON` / `must contain a JSON array` | 상태 파일 손상/읽기 실패 | 상태 파일을 백업 후 삭제(위 reconcile 항목의 경로 참고) |
+| `accountSeq is required` | 사용할 계좌가 없음 | 계좌 목록을 먼저 조회한 뒤 순번 입력 |
+| `Account is fixed to TOSSINVEST_ACCOUNT` | 고정 계좌와 다른 계좌 지정 | 고정 계좌 사용 또는 설정 변경 후 재시작 |
+| `is not in TOSSINVEST_ALLOWED_SYMBOLS` | 허용목록 밖 종목 | 종목과 허용목록 확인 |
+| `exceeds per-order limit` | 1회 금액 상한 초과 | 수량·가격·한도 확인 |
+| `Daily order amount limit reached` | 해당 시장의 일일 금액 상한 도달 | 사용액 확인 후 해당 시장 초기화 시각까지 대기하거나 설정 검토 |
+| `Daily order count limit reached (KRW/USD)` | 해당 시장의 일일 건수 상한 도달 | 시장별 건수와 초기화 시각 확인 |
+| `KR modify requires quantity` | 국내 정정에 수량 누락 | `quantity` 입력 |
+| `US modify forbids quantity` | 미국 정정에 수량 입력 | `quantity` 제외 |
+| `MARKET forbids price` / `LIMIT requires price` | 주문 방식과 가격 입력 불일치 | 시장가는 가격 제외, 지정가는 가격 확인 |
+| `Cannot value` / `Cannot determine currency` | 기준가격·통화 확인 불가 | 종목·가격 조회 상태 확인 |
+| `unresolved prior operation` | 앞선 작업의 접수·반영이 미확정 | 해당 요청 식별자로 상태 확인, 새 키로 재주문 금지 |
+| `Cannot read guard state (not reset)` | 집계 파일 손상·읽기 실패 | 프로세스 종료 후 백업·원인 확인 |
 
 ### 2) 토스 API 오류 (응답 코드/상태)
 
 | 메시지/코드 | 의미 | 해결 방법 |
 | --- | --- | --- |
-| `허용되지 않은 IP 주소입니다.` | 공인 IP 미등록 | 설치 3단계대로 현재 공인 IP를 허용 목록에 등록 |
-| HTTP 401 / `invalid-token` | 키 오류 또는 비활성 | `API Key`/`Secret Key`와 키 활성 상태 확인 |
-| HTTP 429 | 요청 한도 초과 | 잠시 후 재시도(프로그램이 일부 자동 재시도함) |
+| `허용되지 않은 IP 주소입니다.` | 공인 IP 미등록 | 설치 3단계대로 현재 공인 IP 등록 |
+| HTTP 401 / `invalid-token` | 인증 오류 | Client ID·Client Secret과 키 활성 상태 확인. 같은 키의 별도 토큰 발급 여부 확인 |
+| HTTP 429 | 요청 한도 초과 | 잠시 후 재시도. 일부 요청은 서버가 제한된 횟수로 자동 재시도 |
 | `account-header-required` | 계좌 정보 필요 | `TOSSINVEST_ACCOUNT` 또는 요청의 `accountSeq` 확인 |
-| `confirm-high-value-required` | 고액 주문 확인 필요 | 금액 재확인 후 주문 입력에 `confirmHighValueOrder: true` |
+| `confirm-high-value-required` | 고액 주문 확인 필요 | 금액 확인·사용자 승인 후 `confirmHighValueOrder: true` 전달 |
 
 ### 3) 네트워크/연결 오류
 
 | 메시지 | 의미 | 해결 방법 |
 | --- | --- | --- |
-| `Failed to connect to Toss Open API.` | 연결 실패 | 인터넷, DNS, VPN, 방화벽, `TOSSINVEST_BASE_URL` 확인 |
-| `Toss Open API request timed out after 20s.` | 응답 지연(20초 초과) | 네트워크 상태 확인 후 재시도 |
-| `Invalid OAuth token response` / `OAuth token request failed (...)` | 토큰 발급 실패 | 키를 확인하고 잠시 후 재시도 |
+| `Failed to connect to Toss Open API.` | 연결 실패 | 인터넷·VPN·방화벽·`TOSSINVEST_BASE_URL` 확인 |
+| `Toss Open API request timed out after 20s.` | 응답 지연 | 주문 요청이었다면 실제 접수 여부부터 확인 |
+| `Invalid OAuth token response` / OAuth 토큰 발급 오류 | 토큰 발급 실패 | 연결 정보·IP·키 활성 상태 확인 |
 
-### 4) 주문은 성공했지만 경고가 붙은 경우
+### 4) 주문 접수 후 경고·접수 불명
 
-응답에 `_guardStateWarning` 필드가 있으면 **주문은 정상적으로 전송·접수된 것**입니다. 내부 한도 집계 기록만 일부 누락됐을 수 있다는 경고이므로, **다시 주문하지 말고** 주문 목록에서 상태를 확인하세요.
+`_guardStateWarning`·`_budgetRetained` 또는 `Order acceptance unknown`이 보이면 실제 접수·취소 상태를 먼저 확인하세요. 한도 예산은 보수적으로 유지됩니다. 새 요청 식별자로 같은 주문을 반복하지 마세요.
 
-## 변경 사항 (0.2.0)
+## 변경 사항 (0.3.0)
 
-0.2.0은 거래 안전장치를 대폭 강화한 버전입니다. 주요 변경점:
+### 추가된 기능
 
-- **`TOSSINVEST_YOLO_TRADING` 옵션 제거** → 세분화된 거래 가드레일로 대체했습니다. 1회/하루 금액 한도, 하루 건수 한도, 종목 허용목록, 매도·시장가 차단, 계좌 잠금을 각각 켤 수 있습니다. (위 `거래 가드레일` 참고)
-- **주문 확인값 체계**: 기본값에서 모든 주문에 `confirmOrderAction: true`를 요구해, AI가 실수로 주문을 넣는 것을 막습니다.
-- **하루 한도를 실제 주문 상태로 재계산**: 미체결 주문을 토스에 다시 조회해 정정·취소까지 정확히 반영합니다.
-- **주문 정정 규칙 강제**: 정정은 원주문을 대체해 새 `orderId`를 돌려준다는 점을 반영하고, 국내/미국·지정가/시장가별 입력 규칙을 주문 전에 검사합니다. 정정도 생성과 동일하게 매도·시장가 차단, 종목 허용목록, 금액·건수 한도의 적용을 받습니다(정정으로 가드레일을 우회할 수 없음).
-- **안정성 개선**: API 요청 20초 타임아웃, OAuth 토큰 오류 메시지 개선, 주문 기록 실패 시에도 주문 성공 응답을 보존하고 경고만 첨부.
+- **REST 도구 20개 추가**: 전체 종목, 종목별 매매동향 5종, 주식 랭킹, 시장 지표 3종, 섹터 5종, 조건주문 5종을 지원합니다. 조회 34개·거래 6개입니다.
+- **최신 주문 입력 반영**: 국내 `timeInForce=OPG`, 시장별 주문 조합·소수점 수량·날짜·종목 개수·페이지네이션 검증을 보완했습니다.
+- **일일 한도 개선**: 계좌·시장별 금액과 건수를 분리하고 국내 KST 20:01·미국 KST 10:01에 초기화합니다. 생성·정정·취소는 저장한 산정 기준으로 차액을 반영합니다.
+- **공유 상태·장애 복구**: 프로세스 내부 토큰 발급을 공유하고, 같은 컴퓨터·OS 사용자·저장 경로의 프로세스 간 토큰·주문 예산 잠금을 추가했습니다. 주문 전 예산 예약과 접수 불명 작업의 식별자 보존·복구를 지원합니다.
 
-자세한 내부 변경 이력은 git 커밋 기록을 참고하세요.
+### 수정된 동작과 호환성
 
-## 개발자용
+| 변경 | 업데이트할 때 확인할 내용 |
+| --- | --- |
+| 연결 정보 이름 변경 | `TOSSINVEST_CLIENT_ID`·`TOSSINVEST_CLIENT_SECRET` 사용. 기존 `TOSSINVEST_API_KEY`·`TOSSINVEST_SECRET_KEY`도 호환하며 새 이름 우선 |
+| 계좌 1 자동 선택 제거 | ACCOUNT 미설정 시 계좌 관련 도구에 `accountSeq` 입력. ACCOUNT 설정 시 해당 계좌로 고정 |
+| `confirmOrderAction` 삭제 | 주문 입력에서 제거. `TOSSINVEST_REQUIRE_ORDER_CONFIRMATION`도 제거 |
+| 매도·시장가 차단 설정 삭제 | `TOSSINVEST_ALLOW_SELL_ORDERS`·`TOSSINVEST_ALLOW_MARKET_ORDERS` 제거. 거래 활성화 시 매도·시장가 가능 |
+| 계좌 잠금 설정 통합 | `TOSSINVEST_LOCK_ACCOUNT` 제거. ACCOUNT 설정 자체로 계좌 고정 |
+| 고액 확인 인자 유지 | `confirmHighValueOrder`를 토스에 그대로 전달. 고액 여부를 로컬에서 중복 판정하거나 자동 승인하지 않음 |
+| 응답 이중 래핑 수정 | `structuredContent.result.result` → `structuredContent.result`. 텍스트 JSON도 같은 구조 |
+| 시장가 산정 변경 | 호가 → 직전 체결가. 버퍼 기본 5→3%, 매수 +p%·매도 −p% |
+| 일일 건수 상한 분리 | `TOSSINVEST_DAILY_MAX_ORDER_COUNT_KRW`·`TOSSINVEST_DAILY_MAX_ORDER_COUNT_USD`로 각각 설정 |
+| 집계 방식·파일 변경 | 시장별 초기화와 이벤트 차액 집계 사용. 기존 파일 백업 후 새 상태로 이전 |
 
-이 저장소를 직접 받아 개발하려면:
+기존 `TOSSINVEST_DAILY_MAX_ORDER_COUNT`는 호환용으로 읽지만 이제 **국내·미국 각각의 기본 상한**입니다. 기존 값이 5라면 국내 5건·미국 5건이며, 새 시장별 값이 있으면 우선합니다. 한쪽 시장을 무제한으로 쓰려면 기존 합산 변수를 제거하고 제한할 시장의 새 변수만 설정하세요.
 
-```bash
-npm install
-npm run typecheck
-npm test
-npm run build
-```
+제거된 설정은 경고 후 무시합니다. 이전 이름·폐기 설정 안내는 시작 시 `stderr`와 해당 세션의 첫 도구 응답 `_warnings`에 전달하고, 값이나 비밀정보는 출력하지 않습니다. Smithery의 기존 `apiKey`·`secretKey` 입력 필드는 유지하며 내부에서는 새 환경변수 이름을 사용합니다.
 
-실제 주문 없이 주문 도구 흐름을 mock 서버로 테스트하려면:
+### 버그 수정·최적화
 
-```bash
-npm run smoke:trading:mock
-```
+- 금액 한도가 설정된 시장에서만 가격 조회·예산 산정을 수행하도록 수정했습니다. 다른 시장의 한도 때문에 불필요하게 주문이 차단되지 않습니다.
+- 공유 토큰 캐시가 null·빈 토큰 등 잘못된 형식이면 정상적으로 다시 발급하도록 보완했습니다. 고액 확인 오류 안내에도 사용자 승인 필요와 자동 확인값 변경 금지를 명시했습니다.
+
+- 동시 요청의 토큰 중복 발급, 프로세스 간 주문 집계 덮어쓰기, 키·계좌별 집계 혼합을 수정했습니다.
+- 십진수 금액 연산을 적용하고, 부분체결된 미국 주문 정정의 과대 추정과 멱등 재응답의 금액·건수 중복 집계를 수정했습니다.
+- 상태 파일의 필드·금액·수량·통화를 검증합니다. 손상된 파일이나 불완전한 체결 정보를 0으로 확정하지 않습니다.
+- 주문 응답 유실 시 요청 식별자를 보존하고, 접수 후 저장 실패 시 주문 성공 응답을 유지하면서 미확정 예산을 보수적으로 보존합니다.
+- 불필요한 시세·전체 주문 조회, 상세 조회의 장부 쓰기 잠금, KST 날짜 포매터 재생성을 줄였습니다. 실패한 파일 교체의 임시 파일도 정리합니다.
+- null·비JSON·응답 본문 수신 오류에서 원래 HTTP 상태와 요청 식별자를 보존하도록 보완했습니다.
+- 조건주문 취소의 정상 `204 No Content`를 지원합니다. 취소 후 상세가 404로 사라지면 예산을 환급하지 않고 유지하며 경고합니다. 상세 조회는 생성·정정을 재전송하지 않습니다.
+- SDK를 1.32.1로 올렸습니다. 개발용 UI·mock 서버·검증 스크립트·테스트 자료는 GitHub·npm 배포 대상에서 제외했고, CI는 타입 검사·빌드·패키징을 확인합니다.
+
+### 기존 상태 파일 이전
+
+업그레이드 전에 기존 MCP 프로세스를 모두 종료하세요. 이전 `guard-state.json`은 백업 후 현재·전일의 검증 가능한 기록을 중복 제거해 시장별 초기 사용액·건수로 한 번 가져옵니다. 이전 파일에는 API 키 식별자가 없고 미체결 단가를 완전히 복구할 수 없어, 과거 취소 환급은 추정하지 않습니다. 손상 파일을 조용히 0으로 초기화하지 않습니다.
+
+개발 중인 0.3.0의 v3(자정 기준) 장부가 있으면 백업 후 v4로 보수적으로 이전합니다. 첫 집계 구간의 사용액이 실제보다 클 수 있습니다. 시장을 구분할 수 없는 과거 합산 건수는 각 시장 상한에 보수적으로 적용하고, 두 시장이 각각 다음 초기화 시각을 지날 때까지 유지합니다.
+
+구버전으로 돌아갈 때는 백업 파일과 기존 설정을 사용해야 하며 새 버전에서 추가한 거래는 구버전 파일에 반영되지 않습니다. 구·신 버전을 같은 키로 동시에 실행하지 마세요.
+
+### 업데이트 방법
+
+npm에 새 버전이 올라와도 설치본이나 실행 중인 MCP가 자동 교체되지는 않습니다.
+
+- **버전 고정**: 이 문서의 `tossinvest-mcp@0.3.0`은 해당 버전을 유지합니다. 업데이트하려면 버전을 직접 바꾸세요.
+- **최신 버전 확인 후 실행**: `args`를 `["-y", "--prefer-online", "tossinvest-mcp@latest"]`로 설정하면 다음 실행 시 최신 태그를 확인하는 방식으로 사용할 수 있습니다.
+- **전역·프로젝트 설치본**: 업데이트하거나 재설치해야 합니다. 단순한 `npx tossinvest-mcp`는 로컬 설치본·캐시·npm 설정의 영향을 받아 항상 최신이라고 보장하지 않습니다.
+
+설정을 바꾸거나 업데이트한 뒤에는 MCP 클라이언트를 완전히 종료했다가 다시 실행하세요. 별도의 자동 업데이터는 제공하지 않습니다.
 
 ## 면책조항
 
@@ -554,6 +560,6 @@ MIT License
 
 ## 기타
 
-토스증권 Open API 공식 문서: https://developers.tossinvest.com/docs
+토스증권 Open API 공식 문서: [개발자 문서](https://developers.tossinvest.com/docs)
 
 README.md 파일 작성 등 일부 작업에 생성형 AI의 도움을 받았음을 밝힙니다.

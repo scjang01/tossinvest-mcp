@@ -1,28 +1,128 @@
 {
   "serverInfo": {
     "name": "tossinvest-mcp",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "tools": [
-    { "name": "toss_get_prices" },
-    { "name": "toss_get_orderbook" },
-    { "name": "toss_get_trades" },
-    { "name": "toss_get_candles" },
-    { "name": "toss_get_price_limits" },
-    { "name": "toss_get_stocks" },
-    { "name": "toss_get_stock_warnings" },
-    { "name": "toss_get_exchange_rate" },
-    { "name": "toss_get_kr_market_calendar" },
-    { "name": "toss_get_us_market_calendar" },
-    { "name": "toss_get_accounts" },
-    { "name": "toss_get_holdings" },
-    { "name": "toss_get_buying_power" },
-    { "name": "toss_get_sellable_quantity" },
-    { "name": "toss_get_commissions" },
-    { "name": "toss_get_orders" },
-    { "name": "toss_get_order" },
-    { "name": "toss_create_order" },
-    { "name": "toss_modify_order" },
-    { "name": "toss_cancel_order" }
+    {
+      "name": "toss_get_orderbook"
+    },
+    {
+      "name": "toss_get_prices"
+    },
+    {
+      "name": "toss_get_trades"
+    },
+    {
+      "name": "toss_get_price_limits"
+    },
+    {
+      "name": "toss_get_candles"
+    },
+    {
+      "name": "toss_get_stocks"
+    },
+    {
+      "name": "toss_get_stock_warnings"
+    },
+    {
+      "name": "toss_get_exchange_rate"
+    },
+    {
+      "name": "toss_get_kr_market_calendar"
+    },
+    {
+      "name": "toss_get_us_market_calendar"
+    },
+    {
+      "name": "toss_list_stocks"
+    },
+    {
+      "name": "toss_get_stock_investor_trading"
+    },
+    {
+      "name": "toss_get_stock_program_trades"
+    },
+    {
+      "name": "toss_get_stock_short_selling"
+    },
+    {
+      "name": "toss_get_stock_credit_trades"
+    },
+    {
+      "name": "toss_get_stock_securities_lending"
+    },
+    {
+      "name": "toss_get_rankings"
+    },
+    {
+      "name": "toss_get_market_indicator_prices"
+    },
+    {
+      "name": "toss_get_market_indicator_candles"
+    },
+    {
+      "name": "toss_get_market_indicator_investor_trading"
+    },
+    {
+      "name": "toss_list_sectors"
+    },
+    {
+      "name": "toss_get_sector_rankings"
+    },
+    {
+      "name": "toss_get_sector"
+    },
+    {
+      "name": "toss_get_sector_stocks"
+    },
+    {
+      "name": "toss_get_sector_etfs"
+    },
+    {
+      "name": "toss_get_accounts"
+    },
+    {
+      "name": "toss_get_holdings"
+    },
+    {
+      "name": "toss_get_buying_power"
+    },
+    {
+      "name": "toss_get_sellable_quantity"
+    },
+    {
+      "name": "toss_get_commissions"
+    },
+    {
+      "name": "toss_get_orders"
+    },
+    {
+      "name": "toss_get_order"
+    },
+    {
+      "name": "toss_get_conditional_orders"
+    },
+    {
+      "name": "toss_get_conditional_order"
+    },
+    {
+      "name": "toss_create_order"
+    },
+    {
+      "name": "toss_modify_order"
+    },
+    {
+      "name": "toss_cancel_order"
+    },
+    {
+      "name": "toss_create_conditional_order"
+    },
+    {
+      "name": "toss_modify_conditional_order"
+    },
+    {
+      "name": "toss_cancel_conditional_order"
+    }
   ]
 }

@@ -3,16 +3,15 @@
   "properties": {
     "apiKey": {
       "type": "string",
-      "description": "Toss Securities Open API Key (TOSSINVEST_API_KEY)"
+      "description": "Toss Securities OAuth Client ID (TOSSINVEST_CLIENT_ID)"
     },
     "secretKey": {
       "type": "string",
-      "description": "Toss Securities Open API Secret Key (TOSSINVEST_SECRET_KEY)"
+      "description": "Toss Securities OAuth Client Secret (TOSSINVEST_CLIENT_SECRET)"
     },
     "account": {
       "type": "string",
-      "description": "Default account sequence number, defaults to 1 (TOSSINVEST_ACCOUNT)",
-      "default": "1"
+      "description": "Optional fixed account sequence (TOSSINVEST_ACCOUNT). If omitted, tools require accountSeq."
     },
     "enableTrading": {
       "type": "boolean",

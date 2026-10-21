@@ -1,76 +1,74 @@
-import type { Config } from "../config.js";
-import type { TossClient } from "../toss/client.js";
-import {
-  contributionFromDetail,
-  kstDate,
-  readState,
-  resolveStatePath,
-  writeState,
-  type OrderRecord
-} from "./state.js";
-
-/**
- * Refresh today's (KST) order records against the live Toss order state and
- * return them. This is the source of truth for daily limits: rather than trying
- * to keep a running balance in sync through every modify/cancel, we recompute
- * each open order's contribution from scratch at check time.
- *
- *  - Terminal orders (FILLED/CANCELED/REJECTED/REPLACED) are frozen: their
- *    contribution is the actually filled notional and they are never polled again.
- *  - Open orders are re-fetched via GET /orders/{orderId} and their contribution
- *    recomputed (filled + open remaining).
- *  - Records without an orderId (e.g. created before recording, or whose order id
- *    is unknown) keep their placement estimate — they cannot be polled.
- *
- * A failure to fetch an open order throws, so the caller blocks the new order
- * rather than acting on an unverifiable daily total. This is the single-session,
- * single-MCP accounting model: only orders placed through this server are tracked.
- */
-export async function reconcileTodayRecords(client: TossClient, config: Config): Promise<OrderRecord[]> {
-  const path = resolveStatePath(config);
-  const all = readState(path);
-  const today = kstDate();
-  let mutated = false;
-
-  const todays: OrderRecord[] = [];
-  for (const record of all) {
-    if (record.date !== today) {
-      continue;
-    }
-    todays.push(record);
-
-    if (record.terminal === true || record.orderId === undefined) {
-      continue; // frozen, or not pollable — keep the cached/estimated contribution
-    }
-
-    let detail: unknown;
-    try {
-      detail = await client.request({
-        path: `/api/v1/orders/${encodeURIComponent(record.orderId)}`,
-        accountSeq: record.account
-      });
-    } catch (error) {
-      throw new Error(
-        `Order blocked: cannot reconcile open order ${record.orderId} against the daily limit: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-
-    const contribution = contributionFromDetail(detail, record);
-    record.status = contribution.status;
-    record.filledAmount = contribution.filled;
-    record.committedAmount = contribution.committed;
-    record.terminal = contribution.terminal;
-    if (contribution.currency !== undefined) {
-      record.currency = contribution.currency;
-    }
-    mutated = true;
+import { Decimal } from "decimal.js";
+import type { BookedOrder } from "./state.js";
+import { unwrap } from "./estimate.js";
+/** Return the still-open value using the original booked valuation, never current quotes. */
+export function remainingAmount(booked: BookedOrder, detail: unknown): string {
+  const root = unwrap(detail);
+  if (
+    !root ||
+    !["KRW", "USD"].includes(
+      root.currency ??
+        (root.market === "KR"
+          ? "KRW"
+          : root.market === "US"
+            ? "USD"
+            : undefined),
+    )
+  )
+    throw new Error("Cannot verify order currency.");
+  if (booked.kind === "conditional") {
+    const retained = booked.legs.map((leg, i) => {
+      const data = i === 0 ? root.first : root.second;
+      if (!data || typeof data.status !== "string")
+        throw new Error("Cannot verify conditional leg status.");
+      return ["WATCHING", "HOLDING", "PAUSED"].includes(data.status)
+        ? "0"
+        : leg.amount;
+    });
+    // With OCO, the maximum is shared by both branches: canceling the opposite
+    // branch must not refund the amount already committed to a triggered branch.
+    return Decimal.max(
+      0,
+      new Decimal(booked.amount).minus(
+        aggregate(booked.group ?? "SINGLE", retained),
+      ),
+    ).toFixed();
   }
 
-  if (mutated) {
-    writeState(path, all);
-  }
-
-  return todays;
+  const qty = root.quantity;
+  const filled = root.execution?.filledQuantity;
+  if (
+    typeof qty !== "string" ||
+    typeof filled !== "string" ||
+    !new Decimal(qty).isFinite() ||
+    !new Decimal(filled).isFinite() ||
+    new Decimal(filled).lt(0) ||
+    new Decimal(filled).gt(qty)
+  )
+    throw new Error("Cannot verify filled quantity; reserved budget retained.");
+  if (booked.legs[0]?.unitPrice)
+    return Decimal.min(
+      booked.amount,
+      new Decimal(qty).minus(filled).mul(booked.legs[0].unitPrice),
+    ).toFixed();
+  const filledAmount = root.execution?.filledAmount;
+  if (
+    typeof filledAmount !== "string" ||
+    !new Decimal(filledAmount).isFinite() ||
+    new Decimal(filledAmount).lt(0)
+  )
+    throw new Error(
+      "Cannot verify amount-order fills; reserved budget retained.",
+    );
+  return Decimal.max(
+    0,
+    new Decimal(booked.amount).minus(filledAmount),
+  ).toFixed();
+}
+export function aggregate(group: string, amounts: string[]): string {
+  return (
+    group === "OCO"
+      ? Decimal.max(...amounts)
+      : amounts.reduce((a, v) => a.plus(v), new Decimal(0))
+  ).toFixed();
 }

@@ -6,6 +6,8 @@ import { createServer } from "./server.js";
 
 async function main() {
   const config = loadConfig();
+  for (const warning of config.warnings ?? [])
+    console.error(`[migration] ${warning}`);
   const server = createServer(config);
   const transport = new StdioServerTransport();
 
