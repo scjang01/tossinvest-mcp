@@ -89,6 +89,9 @@
       "name": "toss_get_holdings"
     },
     {
+      "name": "toss_get_transactions"
+    },
+    {
       "name": "toss_get_buying_power"
     },
     {
