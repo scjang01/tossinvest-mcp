@@ -11,7 +11,7 @@ import { registerOrderTools } from "./tools/orders.js";
 export function createServer(config: Config): McpServer {
   const server = new McpServer({
     name: "tossinvest-mcp",
-    version: "0.3.0",
+    version: "0.3.1",
   });
   const client = new TossClient(config);
   setServerWarnings(server, config.warnings ?? []);

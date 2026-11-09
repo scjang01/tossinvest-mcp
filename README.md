@@ -69,7 +69,7 @@
 - `toss_modify_conditional_order`: 조건주문 수정
 - `toss_cancel_conditional_order`: 조건주문 취소
 
-0.3.0은 REST 도구 20개를 추가해 **조회 34개·거래 6개**를 제공합니다. 로컬 stdio 방식이며 WebSocket이나 원격 HTTP/SSE 서버는 제공하지 않습니다.
+0.3.1은 투자자별 순매수·순매도 랭킹과 계좌 거래내역 조회를 추가해 **조회 36개·거래 6개**를 제공합니다. 로컬 stdio 방식이며 WebSocket이나 원격 HTTP/SSE 서버는 제공하지 않습니다.
 
 특징:
 
