@@ -195,6 +195,24 @@ export function registerExtendedMarketTools(
       }),
   );
   register(
+    "toss_get_investor_trading_rankings",
+    {
+      title: "투자자별 순매수·순매도 랭킹 조회",
+      description:
+        "국내 주식·ETF의 외국인·기관·개인별 순매수·순매도 랭킹을 원화 거래액 기준으로 조회합니다. count는 각 투자자의 순매수·순매도 목록에 각각 적용되며 기본값과 최댓값은 100입니다. 최근 영업일 데이터만 제공하며 과거 날짜 조회는 지원하지 않습니다. 투자자별 기준 시각 rankedAt을 확인하세요. 개인 데이터는 정규장 종료 전에는 직전 영업일 기준일 수 있습니다. 시세는 포함하지 않으므로 필요하면 반환된 symbol로 toss_get_prices를 호출하세요.",
+      inputSchema: {
+        count: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    ({ count }) =>
+      runTool(() =>
+        client.request({
+          path: "/api/v1/rankings/investor-trading",
+          query: { count },
+        }),
+      ),
+  );
+  register(
     "toss_get_market_indicator_prices",
     {
       title: "시장 지표 현재가 조회",
