@@ -145,7 +145,7 @@ MCP 클라이언트의 설정 파일 또는 MCP Servers 설정 화면에 아래 
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["-y", "tossinvest-mcp@0.3.0"],
+      "args": ["-y", "tossinvest-mcp"],
       "env": {
         "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
         "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret"
@@ -180,7 +180,7 @@ MCP 클라이언트에서 다음처럼 요청합니다.
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["-y", "tossinvest-mcp@0.3.0"],
+      "args": ["-y", "tossinvest-mcp"],
       "env": {
         "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
         "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
@@ -230,7 +230,7 @@ AAPL 최근 체결 내역 10개를 조회해줘.
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["-y", "tossinvest-mcp@0.3.0"],
+      "args": ["-y", "tossinvest-mcp"],
       "env": {
         "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
         "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
@@ -348,7 +348,7 @@ MCP 클라이언트에서 자연어로 요청할 때는 아래처럼 구체적�
   "mcpServers": {
     "tossinvest": {
       "command": "npx",
-      "args": ["-y", "tossinvest-mcp@0.3.0"],
+      "args": ["-y", "tossinvest-mcp"],
       "env": {
         "TOSSINVEST_CLIENT_ID": "발급받은-Client-ID",
         "TOSSINVEST_CLIENT_SECRET": "발급받은-Client-Secret",
@@ -540,7 +540,6 @@ Node.js가 설치되어 있지 않거나 PATH에 등록되지 않은 상태입�
 
 npm에 새 버전이 올라와도 설치본이나 실행 중인 MCP가 자동 교체되지는 않습니다.
 
-- **버전 고정**: 이 문서의 `tossinvest-mcp@0.3.0`은 해당 버전을 유지합니다. 업데이트하려면 버전을 직접 바꾸세요.
 - **최신 버전 확인 후 실행**: `args`를 `["-y", "--prefer-online", "tossinvest-mcp@latest"]`로 설정하면 다음 실행 시 최신 태그를 확인하는 방식으로 사용할 수 있습니다.
 - **전역·프로젝트 설치본**: 업데이트하거나 재설치해야 합니다. 단순한 `npx tossinvest-mcp`는 로컬 설치본·캐시·npm 설정의 영향을 받아 항상 최신이라고 보장하지 않습니다.
 
