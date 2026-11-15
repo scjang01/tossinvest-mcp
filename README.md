@@ -2,7 +2,7 @@
 
 ## 프로그램 개요
 
-현재 버전: **0.3.0**
+현재 버전: **0.3.1**
 
 `tossinvest-mcp`는 토스증권 Open API(현재가 조회, 주문, 잔고 조회 등)를 OpenAI 서비스, Claude Desktop, Cursor 같은 MCP 지원 프로그램에서 사용할 수 있게 해주는 로컬 MCP 서버입니다.
 
