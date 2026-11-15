@@ -8,7 +8,21 @@ export const symbolsSchema = z.string().refine((v) => {
 }, "Provide 1 to 200 comma-separated symbols, without empty entries.");
 export const accountSeqSchema = z.number().int().positive();
 export const currencySchema = z.enum(["KRW", "USD"]);
-export const dateSchema = z.iso.date();
+// Advertise standard formats without copying Zod's long patterns to every tool.
+// The same validators still run server-side.
+const isoDate = z.iso.date();
+const isoDateTime = z.string().datetime({ offset: true });
+export const dateSchema = z
+  .string()
+  .refine((v) => isoDate.safeParse(v).success, "Use a valid YYYY-MM-DD date.")
+  .meta({ format: "date" });
+export const dateTimeSchema = z
+  .string()
+  .refine(
+    (v) => isoDateTime.safeParse(v).success,
+    "Use an ISO 8601 timestamp with Z or a UTC offset.",
+  )
+  .meta({ format: "date-time" });
 export const decimalSchema = z
   .string()
   .max(30)
@@ -28,10 +42,10 @@ export const highValueSchema = z
   .boolean()
   .optional()
   .describe(
-    "Toss requires true for orders it values at KRW 100 million or more. Set true only when the user has acknowledged and authorized that high-value order; never automatically enable it after an error.",
+    "Toss requires true at KRW 100 million or more. Set true only after the user explicitly approves this high-value order. Never auto-confirm after rejection.",
   );
-export const accountDescription =
-  "When accountSeq is required, call toss_get_accounts first. Select the user's intended account; if multiple accounts are ambiguous, ask the user.";
+const accountDescription =
+  "Call toss_get_accounts first; ask the user if the intended account is unclear.";
 export function accountInputSchema(config: Config) {
   return {
     accountSeq:

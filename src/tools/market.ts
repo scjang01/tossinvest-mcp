@@ -5,10 +5,14 @@ import type { TossClient } from "../toss/client.js";
 import {
   currencySchema,
   dateSchema,
+  dateTimeSchema,
   symbolSchema,
   symbolsSchema,
 } from "../toss/schemas.js";
 import { runTool, registrar } from "./common.js";
+
+const DEFAULT_TRADES_COUNT = 20;
+const DEFAULT_CANDLES_COUNT = 20;
 
 export function registerMarketTools(
   server: McpServer,
@@ -50,8 +54,7 @@ export function registerMarketTools(
     "toss_get_trades",
     {
       title: "Toss Get Trades",
-      description:
-        "Get recent trades for one KRX or US stock symbol. count defaults to the Toss API default and is capped at 50.",
+      description: `Get recent trades for one KRX or US stock symbol. Optional count defaults to ${DEFAULT_TRADES_COUNT} (max 50); set the needed count on the first call.`,
       inputSchema: {
         symbol: symbolSchema,
         count: z.number().int().min(1).max(50).optional(),
@@ -59,7 +62,10 @@ export function registerMarketTools(
     },
     ({ symbol, count }) =>
       runTool(() =>
-        client.request({ path: "/api/v1/trades", query: { symbol, count } }),
+        client.request({
+          path: "/api/v1/trades",
+          query: { symbol, count: count ?? DEFAULT_TRADES_COUNT },
+        }),
       ),
   );
 
@@ -83,13 +89,12 @@ export function registerMarketTools(
     "toss_get_candles",
     {
       title: "Toss Get Candles",
-      description:
-        "Get 1-minute or daily OHLCV candles for one KRX or US stock symbol.",
+      description: `KR/US stock 1-minute or daily OHLCV. count defaults to ${DEFAULT_CANDLES_COUNT} (max 200); set it on the first call. Pass nextBefore as before (ISO 8601 with timezone).`,
       inputSchema: {
         symbol: symbolSchema,
         interval: z.enum(["1m", "1d"]),
         count: z.number().int().min(1).max(200).optional(),
-        before: z.string().datetime({ offset: true }).optional(),
+        before: dateTimeSchema.optional(),
         adjusted: z.boolean().optional(),
       },
     },
@@ -97,7 +102,13 @@ export function registerMarketTools(
       runTool(() =>
         client.request({
           path: "/api/v1/candles",
-          query: { symbol, interval, count, before, adjusted },
+          query: {
+            symbol,
+            interval,
+            count: count ?? DEFAULT_CANDLES_COUNT,
+            before,
+            adjusted,
+          },
         }),
       ),
   );
@@ -140,11 +151,11 @@ export function registerMarketTools(
     {
       title: "Toss Get Exchange Rate",
       description:
-        "Get KRW/USD or USD/KRW exchange rate. dateTime is optional ISO 8601.",
+        "Get KRW/USD or USD/KRW exchange rate. Optional dateTime is ISO 8601 with timezone.",
       inputSchema: {
         baseCurrency: currencySchema,
         quoteCurrency: currencySchema,
-        dateTime: z.string().datetime({ offset: true }).optional(),
+        dateTime: dateTimeSchema.optional(),
       },
     },
     ({ baseCurrency, quoteCurrency, dateTime }) =>

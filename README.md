@@ -2,7 +2,7 @@
 
 ## 프로그램 개요
 
-현재 버전: **0.3.1**
+현재 버전: **0.3.2**
 
 `tossinvest-mcp`는 토스증권 Open API(현재가 조회, 주문, 잔고 조회 등)를 OpenAI 서비스, Claude Desktop, Cursor 같은 MCP 지원 프로그램에서 사용할 수 있게 해주는 로컬 MCP 서버입니다.
 
@@ -43,7 +43,7 @@
 | `toss_get_candles` | 종목의 분봉·일봉 차트 조회 |
 | `toss_get_price_limits` | 종목의 상한가·하한가 조회 |
 | `toss_get_stocks` | 종목명·시장·통화 등 기본 정보 조회 |
-| `toss_list_stocks` | 거래소별 전체 종목 목록 조회 |
+| `toss_list_stocks` | 거래소별 전체 종목 목록 조회. 심볼만 필요하면 `symbolsOnly: true`로 전체 심볼 목록을 한 번에 조회 |
 | `toss_get_stock_warnings` | 종목의 매수 유의사항 조회 |
 | `toss_get_stock_investor_trading` | 국내 종목의 투자자별 매매동향 조회 |
 | `toss_get_stock_program_trades` | 국내 종목의 프로그램매매 동향 조회 |
@@ -85,7 +85,7 @@
 | `toss_modify_conditional_order` | 조건주문 수정 |
 | `toss_cancel_conditional_order` | 조건주문 취소 |
 
-0.3.1은 투자자별 순매수·순매도 랭킹과 계좌 거래내역 조회를 추가해 **조회 36개·거래 6개**를 제공합니다. 로컬 stdio 방식이며 WebSocket이나 원격 HTTP/SSE 서버는 제공하지 않습니다.
+0.3.1 이상 버전은 투자자별 순매수·순매도 랭킹과 계좌 거래내역 조회를 추가해 **조회 36개·거래 6개**를 제공합니다. 로컬 stdio 방식이며 WebSocket이나 원격 HTTP/SSE 서버는 제공하지 않습니다.
 
 ## 설치방법
 

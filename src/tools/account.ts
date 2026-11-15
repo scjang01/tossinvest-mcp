@@ -6,12 +6,13 @@ import { resolveAccountSeq } from "../config.js";
 import type { TossClient } from "../toss/client.js";
 import {
   accountInputSchema,
-  accountDescription,
   currencySchema,
   dateSchema,
   symbolSchema,
 } from "../toss/schemas.js";
 import { runTool, registrar } from "./common.js";
+
+const DEFAULT_TRANSACTIONS_LIMIT = 10;
 
 export function registerAccountTools(
   server: McpServer,
@@ -35,7 +36,7 @@ export function registerAccountTools(
     {
       title: "Toss Get Holdings",
       description:
-        "Get account holdings. accountSeq is optional when TOSSINVEST_ACCOUNT is configured.",
+        "Get account holdings and valuation; optionally filter by symbol.",
       inputSchema: {
         ...accountInputSchema(config),
         symbol: symbolSchema.optional(),
@@ -55,7 +56,8 @@ export function registerAccountTools(
     "toss_get_transactions",
     {
       title: "Toss Get Transactions",
-      description: `Get account transactions: trades, cash and securities transfers, currency exchanges, dividends, interest and fees. KR/US stocks, options and bonds can appear; inspect assetClass. ${accountDescription} Dates use settlementDate in KST, not order or execution dates. Unsettled entries use their expected settlement date; omit the to filter to include future unsettled transactions. Results contain unsettled entries first, then settled entries, newest first within each group. Pass nextCursor unchanged and check hasNext even when fewer than limit entries are returned. Remove cursor when changing account or filters. No related order ID is provided.`,
+      description:
+        "Account trades, transfers, FX, dividends, interest and fees (KR/US stocks, options and bonds; see assetClass). Dates use KST settlement day (expected for unsettled); omit the to filter to include future settlements. Unsettled first, newest first within each group. Follow hasNext even on empty pages; pass nextCursor unchanged and clear it if account or filters change. No order IDs.",
       inputSchema: {
         ...accountInputSchema(config),
         transactionTypes: z
@@ -90,14 +92,16 @@ export function registerAccountTools(
           .string()
           .min(1)
           .optional()
-          .describe("Opaque nextCursor from the previous response."),
+          .describe("Pass nextCursor unchanged."),
         limit: z
           .number()
           .int()
           .min(1)
           .max(100)
           .optional()
-          .describe("Page size; defaults to 20, maximum 100."),
+          .describe(
+            `Page size; defaults to ${DEFAULT_TRANSACTIONS_LIMIT}, maximum 100. Set the needed page size on the first call.`,
+          ),
       },
     },
     ({ accountSeq, transactionTypes, from, to, cursor, limit }) =>
@@ -114,7 +118,7 @@ export function registerAccountTools(
             from,
             to,
             cursor,
-            limit,
+            limit: limit ?? DEFAULT_TRANSACTIONS_LIMIT,
           },
         });
       }),

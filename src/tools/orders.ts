@@ -6,7 +6,6 @@ import { executeTrade, reconcileAccepted } from "../guard/index.js";
 import type { TossClient } from "../toss/client.js";
 import {
   accountInputSchema,
-  accountDescription,
   dateSchema,
   orderCancelSchema,
   orderCreateSchema,
@@ -35,7 +34,9 @@ export function registerOrderTools(
       conditional ? "toss_get_conditional_orders" : "toss_get_orders",
       {
         title: conditional ? "Toss Get Conditional Orders" : "Toss Get Orders",
-        description: `List ${group}; preserve nextCursor/hasNext for pagination. OPEN regular orders ignore limit/cursor. ${accountDescription}`,
+        description: conditional
+          ? "List conditional orders. If hasNext, pass nextCursor as cursor."
+          : "List regular orders. If hasNext, pass nextCursor as cursor. OPEN ignores limit and cursor.",
         inputSchema: {
           ...account,
           status: z.enum(["OPEN", "CLOSED"]),
@@ -66,7 +67,7 @@ export function registerOrderTools(
       conditional ? "toss_get_conditional_order" : "toss_get_order",
       {
         title: `Toss Get ${conditional ? "Conditional " : ""}Order`,
-        description: `Fetch one ${group} by identifier. ${accountDescription}`,
+        description: `Get one ${conditional ? "conditional" : "regular"} order by ${key}.`,
         inputSchema: { ...account, [key]: z.string().min(1) },
       },
       (input) =>
@@ -104,12 +105,15 @@ export function registerOrderTools(
     );
   }
   if (!config.tradingEnabled) return;
-  const instructions = `Real order, no sandbox. ${accountDescription} confirmHighValueOrder requires the user's high-value authorization; never set it automatically to bypass a rejection. Local budget uses lastPrice with configurable +/- buffer, not guaranteed execution value. Daily amount/count windows reset at fixed KST 20:01 for KR and 10:01 for US. Count caps are independent per account and market (KRW/USD); each reset clears only that market's amount and count.`;
+  const unknownAcceptance =
+    "If acceptance is unknown, check order status before retrying.";
+  const createRetry =
+    "If acceptance is unknown, check orders; never resubmit with a new clientOrderId.";
   register(
     "toss_create_order",
     {
       title: "Toss Create Order",
-      description: `${instructions} Provide quantity XOR orderAmount (US MARKET). Fractional quantity: US MARKET SELL only, up to 6 places, regular session until one hour before close. OPG: KR; CLS: US LIMIT.`,
+      description: `Submit a real order. LIMIT needs integer quantity and a price; MARKET omits price. Use exactly one of quantity or US MARKET orderAmount; orderAmount forbids timeInForce. Fractional quantity: US MARKET SELL only, max 6 decimals, regular session until 1h before close. OPG: KR; CLS: US LIMIT. ${createRetry}`,
       inputSchema: { ...orderCreateFields, ...account },
     },
     (input) =>
@@ -130,7 +134,7 @@ export function registerOrderTools(
     "toss_modify_order",
     {
       title: "Toss Modify Order",
-      description: `${instructions} Replaces an order and returns a NEW orderId. KR requires quantity; US forbids quantity and uses unfilled quantity. orderType/price may default to existing values.`,
+      description: `Replace a real order; use the new orderId. KR requires quantity; US omits it and uses the unfilled quantity. orderType and LIMIT price can inherit existing values; MARKET omits price. ${unknownAcceptance}`,
       inputSchema: { ...orderModifySchema.shape, ...account },
     },
     (input) =>
@@ -152,7 +156,8 @@ export function registerOrderTools(
     "toss_cancel_order",
     {
       title: "Toss Cancel Order",
-      description: `Cancel a real order; filled shares cannot be canceled. Cancellation operation ID can differ from the original. ${accountDescription}`,
+      description:
+        "Cancel the remaining unfilled quantity of a real order. Cancellation ID may differ from the original order ID.",
       inputSchema: { ...orderCancelSchema.shape, ...account },
     },
     (input) =>
@@ -167,12 +172,13 @@ export function registerOrderTools(
         });
       }),
   );
-  const conditionalDescription = `${instructions} Conditional budget applies on registration/modification day only, not future trigger day. SINGLE=one leg; OCO=max leg; OTO=sum. Per-order cap applies per leg. Future child orders are not charged a second time. OCO/OTO require LIMIT. expireDate is at most one year from today (Toss validates session/trigger rules).`;
+  const conditionalRules =
+    "SINGLE uses first only; OCO and OTO require LIMIT, with SELL/SELL or BUY/SELL respectively. LIMIT legs need orderPrice; MARKET omits it. expireDate: within one year. Budget applies at registration/change only (SINGLE one, OCO max, OTO sum; cap per leg).";
   register(
     "toss_create_conditional_order",
     {
       title: "Toss Create Conditional Order",
-      description: conditionalDescription,
+      description: `Register a real conditional order. ${conditionalRules} ${createRetry}`,
       inputSchema: {
         ...conditionalFields,
         symbol: symbolSchema,
@@ -196,7 +202,7 @@ export function registerOrderTools(
     "toss_modify_conditional_order",
     {
       title: "Toss Modify Conditional Order",
-      description: `${conditionalDescription} Supply the entire replacement definition. Returns a NEW conditionalOrderId; use it subsequently.`,
+      description: `Replace the full definition of a real conditional order; use the new conditionalOrderId. ${conditionalRules} ${unknownAcceptance}`,
       inputSchema: {
         ...conditionalFields,
         conditionalOrderId: z.string().min(1),
@@ -220,7 +226,8 @@ export function registerOrderTools(
     "toss_cancel_conditional_order",
     {
       title: "Toss Cancel Conditional Order",
-      description: `Cancel the conditional group. Triggered child orders require ordinary cancellation separately. ${accountDescription}`,
+      description:
+        "Cancel a real conditional order group. Cancel any triggered child order separately.",
       inputSchema: { conditionalOrderId: z.string().min(1), ...account },
     },
     (input) =>
